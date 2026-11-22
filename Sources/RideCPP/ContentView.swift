@@ -47,7 +47,7 @@ struct ContentView: View {
             Image(systemName: "arrow.down.circle.fill")
                 .foregroundStyle(Color.accentColor)
                 .font(.system(size: 11))
-            Text(L10n.t("update.available.message", update.tag))
+            Text(L10n.t("update.available.message", update.versionLabel))
                 .font(.system(size: 11))
             Button(L10n.t("update.download")) { state.openAvailableUpdate() }
                 .buttonStyle(.link)

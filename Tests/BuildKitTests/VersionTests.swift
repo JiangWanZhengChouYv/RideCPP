@@ -95,3 +95,19 @@ final class UpdateCheckerTests: XCTestCase {
         }
     }
 }
+
+final class ReleaseLabelTests: XCTestCase {
+    func testVersionLabelStripsTagPrefixAndKeepsBuild() {
+        let release = ReleaseInfo(tag: "v1.0.0(2)", name: "", notes: "",
+                                  htmlURL: URL(string: "https://example.com")!,
+                                  downloadURL: nil, publishedAt: nil)
+        XCTAssertEqual(release.versionLabel, "1.0.0 (2)")
+    }
+
+    func testVersionLabelFallsBackToRawTag() {
+        let release = ReleaseInfo(tag: "nightly", name: "", notes: "",
+                                  htmlURL: URL(string: "https://example.com")!,
+                                  downloadURL: nil, publishedAt: nil)
+        XCTAssertEqual(release.versionLabel, "nightly")
+    }
+}

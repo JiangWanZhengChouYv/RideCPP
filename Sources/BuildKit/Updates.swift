@@ -67,6 +67,12 @@ public struct SemanticVersion: Comparable, CustomStringConvertible, Sendable {
 /// A release published on GitHub.
 public struct ReleaseInfo: Equatable, Sendable {
     public let tag: String
+
+    /// The version part of the tag, without a "v" prefix or build number
+    /// ("v1.0.0(2)" → "1.0.0 (2)").
+    public var versionLabel: String {
+        SemanticVersion(tag)?.description ?? tag
+    }
     public let name: String
     public let notes: String
     public let htmlURL: URL

@@ -703,6 +703,9 @@ public final class AppState: ObservableObject {
     /// Records a file in the recent list (newest first, de-duplicated).
     private func rememberRecent(_ url: URL) {
         let path = url.standardizedFileURL.path
+        // Temporary files (scratch compiles, self-test runs) are noise in a
+        // "recent files" list that is meant to reopen real work.
+        if path.hasPrefix(FileManager.default.temporaryDirectory.path) { return }
         var updated = recentFiles.filter { $0.standardizedFileURL.path != path }
         updated.insert(url, at: 0)
         if updated.count > Self.recentFilesLimit {
