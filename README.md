@@ -67,7 +67,7 @@ xattr -d com.apple.quarantine /Applications/RideCPP.app
 git tag "v1.0.1(1)" && git push origin "v1.0.1(1)"
 ```
 
-或在本机直接发布（需要 `gh auth login`）：
+或在本机直接发布（需要 `gh auth login`）。脚本会先把版本号写进 `project.yml`：
 
 ```bash
 scripts/release.sh 1.0.1 1
