@@ -49,10 +49,15 @@ TXT
 
 DMG="$OUT_DIR/RideCPP-${VERSION}-${ARCHS}.dmg"
 rm -f "$DMG"
-if ! diskutil image create from --format UDZO --volumeName "RideCPP ${VERSION}" "$STAGE" "$DMG" >/dev/null 2>&1; then
-    echo "failed to create disk image" >&2
-    exit 1
+# `hdiutil` is the long-standing tool and works everywhere (including CI
+# runners); the newer `diskutil image create` is only a fallback.
+dmgs_created="no"
+if hdiutil create -volname "RideCPP ${VERSION}" -srcfolder "$STAGE" -fs HFS+ -format UDZO -ov \
+        "$DMG" >/dev/null 2>&1; then
+    dmgs_created="yes"
+elif diskutil image create from --format UDZO --volumeName "RideCPP ${VERSION}" "$STAGE" "$DMG" >/dev/null 2>&1; then
+    dmgs_created="yes"
 fi
-[ -f "$DMG" ] || { echo "disk image was not created" >&2; exit 1; }
+[ "$dmgs_created" = "yes" ] && [ -f "$DMG" ] || { echo "failed to create disk image" >&2; exit 1; }
 
 echo "$DMG"
