@@ -1,0 +1,97 @@
+# Builds a universal Release app and publishes it as a GitHub Release.
+#
+# Trigger it by pushing a version tag, e.g.:
+#   git tag "v1.0.0(1)" && git push origin "v1.0.0(1)"
+#
+# The tag carries both the version and the build number ("v1.0.0(1)"); the same
+# values are written into the bundle before building, so the asset always
+# matches its release.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version, e.g. 1.0.0"
+        required: true
+      build:
+        description: "Build number, e.g. 1"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version and build number
+        id: version
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+            BUILD="${{ inputs.build }}"
+          else
+            TAG="${GITHUB_REF_NAME#v}"
+            VERSION="$(printf '%s' "$TAG" | sed -E 's/[[:space:]]*\([0-9]+\)$//')"
+            BUILD="$(printf '%s' "$TAG" | sed -nE 's/.*\(([0-9]+)\)$/\1/p')"
+            BUILD="${BUILD:-1}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+          echo "Releasing $VERSION ($BUILD)"
+
+      - name: Stamp version into the project
+        run: |
+          /usr/bin/sed -i '' -E "s/(MARKETING_VERSION: \")[^\"]*(\")/\1${{ steps.version.outputs.version }}\2/" project.yml
+          /usr/bin/sed -i '' -E "s/(CURRENT_PROJECT_VERSION: \")[^\"]*(\")/\1${{ steps.version.outputs.build }}\2/" project.yml
+          /usr/bin/sed -i '' -E "s/(CFBundleShortVersionString: \")[^\"]*(\")/\1${{ steps.version.outputs.version }}\2/" project.yml
+          /usr/bin/sed -i '' -E "s/(CFBundleVersion: \")[^\"]*(\")/\1${{ steps.version.outputs.build }}\2/" project.yml
+          grep -E "MARKETING_VERSION|CURRENT_PROJECT_VERSION|VersionString|CFBundleVersion" project.yml
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Build universal release
+        run: |
+          xcodegen generate
+          xcodebuild build -project RideCPP.xcodeproj -scheme RideCPP -configuration Release \
+            -derivedDataPath build-release \
+            ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
+            CLANG_MODULE_CACHE_PATH="$PWD/build-release/ModuleCache" \
+            SWIFT_MODULE_CACHE_PATH="$PWD/build-release/ModuleCache" \
+            CODE_SIGNING_ALLOWED=NO -quiet
+          lipo -archs build-release/Build/Products/Release/RideCPP.app/Contents/MacOS/RideCPP
+
+      - name: Sign and package
+        run: |
+          ./scripts/sign-app.sh build-release/Build/Products/Release/RideCPP.app
+          mkdir -p dist
+          ./scripts/make-dmg.sh build-release/Build/Products/Release/RideCPP.app dist
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "RideCPP ${{ steps.version.outputs.version }} (${{ steps.version.outputs.build }})"
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}({1})', steps.version.outputs.version, steps.version.outputs.build) }}
+          body: |
+            RideCPP ${{ steps.version.outputs.version }} (${{ steps.version.outputs.build }})
+
+            下载下方的 `.dmg`，打开后把 RideCPP 拖进「应用程序」即可。
+
+            > 本版本使用 ad-hoc 签名、未经 Apple 公证。首次打开若提示“无法验证开发者”，
+            > 请在「系统设置 → 隐私与安全性」点「仍要打开」，
+            > 或执行：`xattr -d com.apple.quarantine /Applications/RideCPP.app`
+
+            Download the `.dmg` below and drag RideCPP into Applications.
+            The build is ad-hoc signed and not notarized; if macOS blocks it, allow it in
+            System Settings → Privacy & Security, or run
+            `xattr -d com.apple.quarantine /Applications/RideCPP.app`.
+          files: dist/*.dmg
+          fail_on_unmatched_files: true

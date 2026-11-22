@@ -1,0 +1,20 @@
+# macOS
+.DS_Store
+
+# Build products
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# XcodeGen output is regenerated from project.yml by `make generate`.
+# Commit it if you prefer building without xcodegen installed.
+RideCPP.xcodeproj/
+
+# Editor / tooling noise
+*.swp
+.idea/
+.vscode/
+build-release/
+dist/

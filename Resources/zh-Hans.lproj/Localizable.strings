@@ -1,0 +1,157 @@
+/* RideCPP — 中文（简体）界面字符串。 */
+
+"app.name" = "RideCPP";
+
+/* 文件菜单 */
+"file.newTab" = "新建标签页";
+"file.open" = "打开…";
+"file.save" = "保存";
+"file.saveAs" = "另存为…";
+"file.closeTab" = "关闭标签页";
+"file.untitled" = "未命名";
+"file.untitledTab" = "未命名 %d";
+"file.revealInFinder" = "在访达中显示";
+
+/* 编辑菜单 */
+"edit.undo" = "撤销";
+"edit.redo" = "重做";
+"edit.indent" = "增加缩进";
+"edit.outdent" = "减少缩进";
+"edit.toggleComment" = "注释/取消注释";
+"edit.formatDocument" = "格式化文档";
+"edit.find" = "查找…";
+"menu.edit" = "代码";
+"edit.findNext" = "查找下一个";
+"edit.findPrevious" = "查找上一个";
+
+/* 构建菜单 */
+"menu.build" = "构建";
+"build.build" = "构建";
+"build.run" = "运行";
+"build.stop" = "停止";
+"build.clearOutput" = "清空输出";
+"build.showOutput" = "显示输出";
+"build.hideOutput" = "隐藏输出";
+
+/* 工具栏 */
+"toolbar.build" = "构建";
+"toolbar.run" = "运行";
+"toolbar.stop" = "停止";
+"toolbar.format" = "格式化";
+
+/* 输出面板 */
+"output.title" = "输出";
+"output.segment.console" = "终端";
+"output.segment.problems" = "问题";
+"output.segment.stdin" = "标准输入";
+"output.empty" = "暂无输出。";
+"output.problems.empty" = "未发现问题。";
+"output.stdin.placeholder" = "这里的内容会在运行程序时作为标准输入。";
+"output.show" = "显示输出面板";
+"output.hide" = "隐藏输出面板";
+
+/* 状态 */
+"status.building" = "正在构建…";
+"status.running" = "正在运行…";
+"status.succeeded" = "构建成功";
+"status.failed" = "构建失败";
+"status.runFinished" = "程序结束（退出码 %d）";
+"status.stopped" = "已停止";
+"status.ready" = "就绪";
+
+/* 问题 */
+"problem.error" = "错误";
+"problem.warning" = "警告";
+"problem.note" = "提示";
+"problem.line" = "第 %d 行";
+
+/* 弹窗 */
+"alert.unsaved.title" = "是否保存对“%@”的更改？";
+"alert.unsaved.message" = "如果不保存，你的更改将会丢失。";
+"alert.save" = "保存";
+"alert.dontSave" = "不保存";
+"alert.cancel" = "取消";
+"alert.error" = "错误";
+"alert.readFailed" = "无法打开“%@”。";
+"alert.writeFailed" = "无法保存“%@”。";
+"alert.compilerMissing" = "未找到编译器";
+"alert.compilerMissing.message" = "编译器“%@”不可用，请在设置中检查编译器路径。";
+"alert.openSettings" = "打开设置";
+"alert.formatFailed" = "格式化失败";
+"alert.clangFormatMissing" = "未找到 clang-format。请使用“brew install clang-format”安装，或在设置中指定其路径。";
+"alert.tooLarge" = "该文件较大（%@），编辑可能变慢。";
+"alert.encoding" = "“%@”不是有效的 UTF-8 文件，已使用回退编码打开。";
+
+/* 设置 */
+"settings.title" = "设置";
+"settings.tab.general" = "通用";
+"settings.tab.editor" = "编辑器";
+"settings.tab.build" = "构建与运行";
+"settings.tab.format" = "格式化";
+"settings.appearance" = "外观";
+"settings.fontSize" = "字号";
+"settings.indentWidth" = "缩进宽度";
+"settings.indentWithTabs" = "使用制表符缩进";
+"settings.autoPair" = "自动配对括号与引号";
+"settings.autoIndent" = "自动缩进新行";
+"settings.wrapLines" = "自动换行";
+"settings.showLineNumbers" = "显示行号";
+"settings.compiler" = "编译器";
+"settings.compiler.path" = "编译器路径";
+"settings.compiler.rescan" = "重新检测";
+"settings.compiler.custom" = "自定义路径…";
+"settings.compiler.none" = "未找到编译器";
+"settings.standard" = "C++ 标准";
+"settings.optimization" = "优化级别";
+"settings.extraFlags" = "额外编译参数";
+"settings.runArguments" = "运行参数";
+"settings.extraFlags.hint" = "用空格分隔，例如：-Wall -Wextra -Iinclude";
+"settings.clangFormat.path" = "clang-format 路径";
+"settings.clangFormat.detect" = "自动检测";
+"settings.clangFormat.style" = "风格";
+"settings.clangFormat.hint" = "格式化依赖 clang-format，若未安装可执行“brew install clang-format”。";
+"settings.clangFormat.missing" = "未找到";
+"settings.general.hint" = "界面语言跟随系统设置。";
+"settings.restoreDefaults" = "恢复默认";
+"settings.language" = "界面语言";
+"settings.language.system" = "跟随系统";
+
+/* 其他 */
+"tab.close" = "关闭标签页";
+"tab.unsaved" = "未保存的更改";
+
+/* 程序输入 */
+"output.interrupt" = "中断（Ctrl-C）";
+"output.runStats" = "程序退出，退出码 %d · 用时 %@ · 内存 %@";
+"output.runStatsNoMemory" = "程序退出，退出码 %d · 用时 %@";
+
+/* 终端 */
+"console.idle" = "按 ⌘R 运行——程序输出会显示在这里，直接输入内容并回车即可送入程序。";
+"console.building" = "正在构建…";
+"console.running" = "程序运行中——在框内输入并按回车即可发送。";
+
+
+/* 欢迎页 */
+"welcome.title" = "未打开文件";
+"welcome.subtitle" = "新建一个 C++ 文件，或打开磁盘上的已有文件。";
+"welcome.newFile" = "新建文件";
+"welcome.openFile" = "打开文件…";
+"welcome.recent" = "最近打开";
+"welcome.hint.build" = "构建";
+"welcome.hint.run" = "运行";
+"welcome.hint.format" = "格式化";
+"welcome.hint.comment" = "注释";
+
+"console.noFile" = "新建或打开文件后即可编译运行。";
+
+"status.saved" = "已保存";
+
+/* 更新 */
+"menu.checkForUpdates" = "检查更新…";
+"update.upToDate.title" = "RideCPP 已是最新版本";
+"update.upToDate.message" = "当前版本：%@。";
+"update.failed.title" = "无法检查更新";
+"update.available.title" = "有新版本可用";
+"update.download" = "下载";
+
+"update.available.message" = "新版本 RideCPP %@ 已发布。";

@@ -1,0 +1,157 @@
+/* RideCPP — English interface strings. */
+
+"app.name" = "RideCPP";
+
+/* File menu */
+"file.newTab" = "New Tab";
+"file.open" = "Open…";
+"file.save" = "Save";
+"file.saveAs" = "Save As…";
+"file.closeTab" = "Close Tab";
+"file.untitled" = "Untitled";
+"file.untitledTab" = "Untitled %d";
+"file.revealInFinder" = "Reveal in Finder";
+
+/* Edit menu */
+"edit.undo" = "Undo";
+"edit.redo" = "Redo";
+"edit.indent" = "Indent";
+"edit.outdent" = "Outdent";
+"edit.toggleComment" = "Toggle Comment";
+"edit.formatDocument" = "Format Document";
+"edit.find" = "Find…";
+"menu.edit" = "Code";
+"edit.findNext" = "Find Next";
+"edit.findPrevious" = "Find Previous";
+
+/* Build menu */
+"menu.build" = "Build";
+"build.build" = "Build";
+"build.run" = "Run";
+"build.stop" = "Stop";
+"build.clearOutput" = "Clear Output";
+"build.showOutput" = "Show Output";
+"build.hideOutput" = "Hide Output";
+
+/* Toolbar */
+"toolbar.build" = "Build";
+"toolbar.run" = "Run";
+"toolbar.stop" = "Stop";
+"toolbar.format" = "Format";
+
+/* Output panel */
+"output.title" = "Output";
+"output.segment.console" = "Console";
+"output.segment.problems" = "Problems";
+"output.segment.stdin" = "Standard Input";
+"output.empty" = "No output yet.";
+"output.problems.empty" = "No problems found.";
+"output.stdin.placeholder" = "Text here is sent to the program's standard input when you press Run.";
+"output.show" = "Show Output Panel";
+"output.hide" = "Hide Output Panel";
+
+/* Status */
+"status.building" = "Building…";
+"status.running" = "Running…";
+"status.succeeded" = "Build succeeded";
+"status.failed" = "Build failed";
+"status.runFinished" = "Program finished (exit code %d)";
+"status.stopped" = "Stopped";
+"status.ready" = "Ready";
+
+/* Problems */
+"problem.error" = "error";
+"problem.warning" = "warning";
+"problem.note" = "note";
+"problem.line" = "Line %d";
+
+/* Alerts */
+"alert.unsaved.title" = "Save changes to “%@”?";
+"alert.unsaved.message" = "Your changes will be lost if you don't save them.";
+"alert.save" = "Save";
+"alert.dontSave" = "Don't Save";
+"alert.cancel" = "Cancel";
+"alert.error" = "Error";
+"alert.readFailed" = "Could not open “%@”.";
+"alert.writeFailed" = "Could not save “%@”.";
+"alert.compilerMissing" = "Compiler Not Found";
+"alert.compilerMissing.message" = "The compiler “%@” is not available. Check the compiler path in Settings.";
+"alert.openSettings" = "Open Settings";
+"alert.formatFailed" = "Formatting Failed";
+"alert.clangFormatMissing" = "clang-format was not found. Install it with “brew install clang-format” or set its path in Settings.";
+"alert.tooLarge" = "This file is very large (%@). Editing may be slow.";
+"alert.encoding" = "“%@” is not valid UTF-8 and was opened with a fallback encoding.";
+
+/* Settings */
+"settings.title" = "Settings";
+"settings.tab.general" = "General";
+"settings.tab.editor" = "Editor";
+"settings.tab.build" = "Build & Run";
+"settings.tab.format" = "Formatting";
+"settings.appearance" = "Appearance";
+"settings.fontSize" = "Font size";
+"settings.indentWidth" = "Indent width";
+"settings.indentWithTabs" = "Indent with tabs";
+"settings.autoPair" = "Auto-close brackets and quotes";
+"settings.autoIndent" = "Auto-indent new lines";
+"settings.wrapLines" = "Wrap long lines";
+"settings.showLineNumbers" = "Show line numbers";
+"settings.compiler" = "Compiler";
+"settings.compiler.path" = "Compiler path";
+"settings.compiler.rescan" = "Rescan";
+"settings.compiler.custom" = "Custom path…";
+"settings.compiler.none" = "No compilers found";
+"settings.standard" = "C++ standard";
+"settings.optimization" = "Optimization";
+"settings.extraFlags" = "Extra compile flags";
+"settings.runArguments" = "Run arguments";
+"settings.extraFlags.hint" = "Separate flags with spaces, for example: -Wall -Wextra -Iinclude";
+"settings.clangFormat.path" = "clang-format path";
+"settings.clangFormat.detect" = "Auto-detect";
+"settings.clangFormat.style" = "Style";
+"settings.clangFormat.hint" = "Formatting runs clang-format. Install it with “brew install clang-format” if it is missing.";
+"settings.clangFormat.missing" = "Not found";
+"settings.general.hint" = "The interface follows your system language.";
+"settings.restoreDefaults" = "Restore Defaults";
+"settings.language" = "Language";
+"settings.language.system" = "Follow system";
+
+/* Misc */
+"tab.close" = "Close Tab";
+"tab.unsaved" = "Unsaved changes";
+
+/* Program input */
+"output.interrupt" = "Interrupt (Ctrl-C)";
+"output.runStats" = "Exited with code %d · %@ · memory %@";
+"output.runStatsNoMemory" = "Exited with code %d · %@";
+
+/* Console */
+"console.idle" = "Run with ⌘R — program output appears here, type and press Return to send input.";
+"console.building" = "Building…";
+"console.running" = "Program is running — type here and press Return to send input.";
+
+
+/* Welcome page */
+"welcome.title" = "No file open";
+"welcome.subtitle" = "Create a new C++ file, or open one from disk.";
+"welcome.newFile" = "New File";
+"welcome.openFile" = "Open File…";
+"welcome.recent" = "Recent";
+"welcome.hint.build" = "Build";
+"welcome.hint.run" = "Run";
+"welcome.hint.format" = "Format";
+"welcome.hint.comment" = "Comment";
+
+"console.noFile" = "Open or create a file to compile and run.";
+
+"status.saved" = "Saved";
+
+/* Updates */
+"menu.checkForUpdates" = "Check for Updates…";
+"update.upToDate.title" = "RideCPP is up to date";
+"update.upToDate.message" = "You are running version %@.";
+"update.failed.title" = "Could Not Check for Updates";
+"update.available.title" = "A new version is available";
+"update.download" = "Download";
+
+"update.available.message" = "RideCPP %@ is available.";
