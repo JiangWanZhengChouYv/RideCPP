@@ -76,6 +76,8 @@ final class ConsoleTextView: NSTextView {
     static let terminalText = NSColor(srgbRed: 0.90, green: 0.92, blue: 0.95, alpha: 1)
     /// What the user types: a warm accent that stands out against the output.
     static let terminalInputText = NSColor(srgbRed: 0.55, green: 0.85, blue: 0.95, alpha: 1)
+    /// Placeholder hint drawn over the empty console.
+    static let terminalHintText = NSColor(srgbRed: 0.55, green: 0.58, blue: 0.63, alpha: 1)
     /// Selection and caret.
     static let terminalCaret = NSColor(srgbRed: 0.55, green: 0.85, blue: 0.95, alpha: 1)
     static let terminalSelection = NSColor(srgbRed: 0.20, green: 0.35, blue: 0.50, alpha: 1)
@@ -171,6 +173,18 @@ final class ConsoleTextView: NSTextView {
         let ns = string as NSString
         guard transcriptLength <= ns.length else { return "" }
         return ns.substring(from: transcriptLength)
+    }
+
+    /// Drops the editable tail (what the user typed but did not submit).
+    func clearPendingInput() {
+        let ns = string as NSString
+        guard ns.length > transcriptLength else { return }
+        isApplyingInternalEdit = true
+        textStorage?.replaceCharacters(in: NSRange(location: transcriptLength,
+                                                   length: ns.length - transcriptLength),
+                                       with: "")
+        isApplyingInternalEdit = false
+        onPendingInputChange?("")
     }
 
     func focusInput() {

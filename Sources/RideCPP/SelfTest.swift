@@ -285,9 +285,41 @@ final class SelfTestRunner {
             }
             let backgroundLuminance = luminance(background)
             let textLuminance = luminance(text)
+
+            // Measure what is actually drawn, not the intended constants: render
+            // the view and count how many pixels are dark on a dark background
+            // (invisible text) versus light (legible).
+            var darkGlyphPixels = 0
+            var lightGlyphPixels = 0
+            var renderedBackground = -1.0
+            if let rep = console.bitmapImageRepForCachingDisplay(in: console.bounds) {
+                console.cacheDisplay(in: console.bounds, to: rep)
+                let width = rep.pixelsWide
+                let height = rep.pixelsHigh
+                if width > 0, height > 0 {
+                    // Background sample from an empty area (bottom-right corner).
+                    if let bg = rep.colorAt(x: width - 8, y: height - 8)?.usingColorSpace(.sRGB) {
+                        renderedBackground = luminance(bg)
+                    }
+                    // Text band: the top few lines.
+                    let maxY = min(height, 60)
+                    for y in stride(from: 2, to: maxY, by: 1) {
+                        for x in stride(from: 2, to: min(width, 400), by: 1) {
+                            guard let pixel = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                            let l = luminance(pixel)
+                            if l < 0.25 { darkGlyphPixels += 1 }
+                            if l > 0.6 { lightGlyphPixels += 1 }
+                        }
+                    }
+                }
+            }
             record("console-dark-palette",
                    backgroundLuminance < 0.25 && textLuminance > 0.75,
                    "bg=\(String(format: "%.2f", backgroundLuminance)) text=\(String(format: "%.2f", textLuminance))")
+            // The rendered check: legible text means light pixels on a dark panel.
+            record("console-text-visible-on-dark",
+                   renderedBackground < 0.3 && lightGlyphPixels > 200,
+                   "renderedBg=\(String(format: "%.2f", renderedBackground)) lightPixels=\(lightGlyphPixels) darkPixels=\(darkGlyphPixels)")
 
                 // Capture the console as it looks, for visual review of the palette.
             console.displayIfNeeded()
@@ -302,6 +334,13 @@ final class SelfTestRunner {
         // 7b. Copy all puts the transcript on the pasteboard.
             console.copyAll(nil)
             let copied = NSPasteboard.general.string(forType: .string) ?? ""
+            record("console-input-visible",
+                   consoleInputIsLegible(console),
+                   "typed input rendered")
+            record("console-hint-contrast", consoleHintContrastsInLightMode(),
+                   "hint vs console background")
+            record("console-both-appearances", consoleLegibleInBothAppearances(console),
+                   "light and dark both legible")
             record("console-copy-all",
                    !copied.isEmpty && copied.contains("Hello,"),
                    "copied=\(copied.count) chars: \(escaped(String(copied.prefix(40))))")
@@ -581,4 +620,118 @@ final class SelfTestRunner {
         print("[selftest] \(passed ? "ALL CHECKS PASSED" : "SOME CHECKS FAILED") -> \(reportPath)")
         NSApp.terminate(nil)
     }
+    /// Renders the console with typed input and reports whether that text is light
+    /// on a dark background (i.e. actually visible).
+    private func consoleInputIsLegible(_ console: ConsoleTextView) -> Bool {
+        // Snapshot the transcript so the probe leaves the console exactly as it
+        // found it: later checks type into this same view.
+        let savedTranscript = console.transcriptText
+        let savedSelection = console.selectedRange()
+        defer {
+            // `replaceTranscript` keeps the pending tail, so clear it first or the
+            // probe's own text leaks into later checks.
+            console.clearPendingInput()
+            console.replaceTranscript(savedTranscript)
+            console.setSelectedRange(savedSelection)
+        }
+        console.replaceTranscript("")
+        console.setSelectedRange(NSRange(location: 0, length: 0))
+        console.insertText("typed input line", replacementRange: NSRange(location: NSNotFound, length: 0))
+        guard let rep = console.bitmapImageRepForCachingDisplay(in: console.bounds) else { return false }
+        console.cacheDisplay(in: console.bounds, to: rep)
+        var light = 0
+        var background = 1.0
+        if let bg = rep.colorAt(x: rep.pixelsWide - 8, y: rep.pixelsHigh - 8)?.usingColorSpace(.sRGB) {
+            background = 0.2126 * Double(bg.redComponent) + 0.7152 * Double(bg.greenComponent)
+                + 0.0722 * Double(bg.blueComponent)
+        }
+        for y in stride(from: 2, to: min(rep.pixelsHigh, 40), by: 1) {
+            for x in stride(from: 2, to: min(rep.pixelsWide, 400), by: 1) {
+                guard let pixel = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                let l = 0.2126 * Double(pixel.redComponent) + 0.7152 * Double(pixel.greenComponent)
+                    + 0.0722 * Double(pixel.blueComponent)
+                if l > 0.5 { light += 1 }
+            }
+        }
+        return background < 0.3 && light > 100
+    }
+
+    /// Renders the console once under a forced light appearance and once under a
+    /// forced dark appearance, and reports whether the typed text is legible in
+    /// both. The bug being guarded against was text that only vanished in one of
+    /// the two modes, so checking a single appearance is not enough.
+    private func consoleLegibleInBothAppearances(_ console: ConsoleTextView) -> Bool {
+        let savedTranscript = console.transcriptText
+        let savedSelection = console.selectedRange()
+        defer {
+            console.clearPendingInput()
+            console.replaceTranscript(savedTranscript)
+            console.setSelectedRange(savedSelection)
+            console.appearance = nil
+        }
+        console.replaceTranscript("")
+        console.setSelectedRange(NSRange(location: 0, length: 0))
+        console.insertText("typed input line", replacementRange: NSRange(location: NSNotFound, length: 0))
+
+        for name in ["aqua", "darkAqua"] {
+            console.appearance = NSAppearance(named: name == "aqua" ? .aqua : .darkAqua)
+            console.needsDisplay = true
+            console.displayIfNeeded()
+            guard let rep = console.bitmapImageRepForCachingDisplay(in: console.bounds) else { return false }
+            console.cacheDisplay(in: console.bounds, to: rep)
+
+            var light = 0
+            var dark = 0
+            var background = -1.0
+            if let bg = rep.colorAt(x: rep.pixelsWide - 8, y: rep.pixelsHigh - 8)?.usingColorSpace(.sRGB) {
+                background = 0.2126 * Double(bg.redComponent)
+                    + 0.7152 * Double(bg.greenComponent) + 0.0722 * Double(bg.blueComponent)
+            }
+            for y in stride(from: 2, to: min(rep.pixelsHigh, 40), by: 1) {
+                for x in stride(from: 2, to: min(rep.pixelsWide, 400), by: 1) {
+                    guard let pixel = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                    let l = 0.2126 * Double(pixel.redComponent)
+                        + 0.7152 * Double(pixel.greenComponent) + 0.0722 * Double(pixel.blueComponent)
+                    if l > 0.55 { light += 1 }
+                    if l < 0.25 { dark += 1 }
+                }
+            }
+            // Whichever background the console uses, the glyphs must contrast with
+            // it: light text on a dark panel, or dark text on a light panel.
+            let legible = background < 0.4 ? light > 100 : dark > 100
+            Self.consoleAppearanceReport[name] = "bg=\(String(format: "%.2f", background)) light=\(light) dark=\(dark) ok=\(legible)"
+            if !legible { return false }
+        }
+        return true
+    }
+
+    nonisolated(unsafe) static var consoleAppearanceReport: [String: String] = [:]
+
+    /// The empty-console hint sits on the fixed dark console panel, so its colour
+    /// must contrast with that panel in BOTH system appearances. Using a semantic
+    /// colour made it near-black in light mode and effectively invisible.
+    private func consoleHintContrastsInLightMode() -> Bool {
+        func luminance(_ color: NSColor) -> Double {
+            guard let srgb = color.usingColorSpace(.sRGB) else { return -1 }
+            return 0.2126 * Double(srgb.redComponent)
+                + 0.7152 * Double(srgb.greenComponent) + 0.0722 * Double(srgb.blueComponent)
+        }
+        // Resolve the hint colour under each appearance, as the view would.
+        var results: [String: Double] = [:]
+        for name in [NSAppearance.Name.aqua, .darkAqua] {
+            let appearance = NSAppearance(named: name)
+            var resolved = NSColor.white
+            appearance?.performAsCurrentDrawingAppearance {
+                resolved = ConsoleTextView.terminalHintText.usingColorSpace(.sRGB) ?? .white
+            }
+            let background = luminance(ConsoleTextView.terminalBackground)
+            let hint = luminance(resolved)
+            // The hint must be clearly lighter than the panel it is drawn on.
+            if hint - background < 0.25 { return false }
+            results[name.rawValue] = hint
+        }
+        _ = results
+        return true
+    }
+
 }

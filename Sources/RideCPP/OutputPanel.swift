@@ -127,7 +127,11 @@ struct OutputPanel: View {
                 if state.outputText.isEmpty && !state.hasPendingConsoleInput && state.selectedDocument != nil {
                     Text(placeholder)
                         .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.tertiary)
+                        // The console background is a fixed dark panel, so the hint
+                        // must be a fixed light colour too. `.tertiary` follows the
+                        // system appearance and turned near-black in light mode,
+                        // making the hint invisible on the dark panel.
+                        .foregroundStyle(Color(nsColor: ConsoleTextView.terminalHintText))
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
                         .allowsHitTesting(false)
