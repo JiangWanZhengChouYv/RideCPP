@@ -8,17 +8,21 @@ public struct EditSettings: Equatable, Sendable {
     public var autoPair: Bool
     public var autoIndent: Bool
     public var autoPairAngles: Bool
+    /// Whether the completion list opens while typing.
+    public var autoComplete: Bool
 
     public init(indentWidth: Int = 4,
                 indentWithTabs: Bool = false,
                 autoPair: Bool = true,
                 autoIndent: Bool = true,
-                autoPairAngles: Bool = false) {
+                autoPairAngles: Bool = false,
+                autoComplete: Bool = true) {
         self.indentWidth = max(1, indentWidth)
         self.indentWithTabs = indentWithTabs
         self.autoPair = autoPair
         self.autoIndent = autoIndent
         self.autoPairAngles = autoPairAngles
+        self.autoComplete = autoComplete
     }
 
     /// The whitespace inserted for one indentation level.

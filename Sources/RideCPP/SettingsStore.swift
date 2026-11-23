@@ -16,6 +16,8 @@ public final class SettingsStore: ObservableObject {
     @Published public var indentWidth: Int { didSet { defaults.set(indentWidth, forKey: Keys.indentWidth) } }
     @Published public var indentWithTabs: Bool { didSet { defaults.set(indentWithTabs, forKey: Keys.indentWithTabs) } }
     @Published public var autoPair: Bool { didSet { defaults.set(autoPair, forKey: Keys.autoPair) } }
+    /// Whether the completion list opens while typing.
+    @Published public var autoComplete: Bool { didSet { defaults.set(autoComplete, forKey: Keys.autoComplete) } }
     @Published public var autoIndent: Bool { didSet { defaults.set(autoIndent, forKey: Keys.autoIndent) } }
     @Published public var showLineNumbers: Bool { didSet { defaults.set(showLineNumbers, forKey: Keys.showLineNumbers) } }
 
@@ -44,6 +46,7 @@ public final class SettingsStore: ObservableObject {
         static let indentWidth = "editor.indentWidth"
         static let indentWithTabs = "editor.indentWithTabs"
         static let autoPair = "editor.autoPair"
+        static let autoComplete = "editor.autoComplete"
         static let autoIndent = "editor.autoIndent"
         static let showLineNumbers = "editor.showLineNumbers"
         static let compilerPath = "build.compilerPath"
@@ -70,6 +73,7 @@ public final class SettingsStore: ObservableObject {
             Keys.indentWidth: 4,
             Keys.indentWithTabs: false,
             Keys.autoPair: true,
+            Keys.autoComplete: true,
             Keys.autoIndent: true,
             Keys.showLineNumbers: true,
             Keys.compilerPath: discovered.first?.path ?? "/usr/bin/clang++",
@@ -85,6 +89,7 @@ public final class SettingsStore: ObservableObject {
         indentWidth = defaults.integer(forKey: Keys.indentWidth)
         indentWithTabs = defaults.bool(forKey: Keys.indentWithTabs)
         autoPair = defaults.bool(forKey: Keys.autoPair)
+        autoComplete = defaults.bool(forKey: Keys.autoComplete)
         autoIndent = defaults.bool(forKey: Keys.autoIndent)
         showLineNumbers = defaults.bool(forKey: Keys.showLineNumbers)
         compilerPath = defaults.string(forKey: Keys.compilerPath) ?? "/usr/bin/clang++"
@@ -111,7 +116,8 @@ public final class SettingsStore: ObservableObject {
         EditSettings(indentWidth: indentWidth,
                      indentWithTabs: indentWithTabs,
                      autoPair: autoPair,
-                     autoIndent: autoIndent)
+                     autoIndent: autoIndent,
+                     autoComplete: autoComplete)
     }
 
     /// Extra flags split on whitespace; quoted segments are kept together.

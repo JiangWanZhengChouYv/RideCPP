@@ -109,6 +109,6 @@ final class EditorEngineTests: XCTestCase {
 
     func testNoopCompletionProviderReturnsNothing() {
         let provider = NoopCompletionProvider()
-        XCTAssertTrue(provider.completionItems(forPrefix: "vec", document: "").isEmpty)
+        XCTAssertTrue(provider.completionItems(forPrefix: "vec", document: "", context: .code).isEmpty)
     }
 }

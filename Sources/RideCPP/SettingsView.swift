@@ -38,6 +38,7 @@ struct SettingsView: View {
                 Toggle(L10n.t("settings.indentWithTabs"), isOn: $settings.indentWithTabs)
                 Toggle(L10n.t("settings.autoPair"), isOn: $settings.autoPair)
                 Toggle(L10n.t("settings.autoIndent"), isOn: $settings.autoIndent)
+                Toggle(L10n.t("settings.autoComplete"), isOn: $settings.autoComplete)
                 Toggle(L10n.t("settings.showLineNumbers"), isOn: $settings.showLineNumbers)
             }
         }

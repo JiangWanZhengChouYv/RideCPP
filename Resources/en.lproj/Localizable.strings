@@ -155,3 +155,6 @@
 "update.download" = "Download";
 
 "update.available.message" = "RideCPP %@ is available.";
+
+"settings.autoComplete" = "Show completions while typing";
+"edit.complete" = "Complete";

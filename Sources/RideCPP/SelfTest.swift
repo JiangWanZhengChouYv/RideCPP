@@ -141,6 +141,44 @@ final class SelfTestRunner {
         record("syntax-highlighting", temporary != nil,
                "colors=\(document.engine.highlighter.lastTokenCount)")
 
+        // 5b. Typing "i" opens the completion list with keywords harvested from
+        //     the compiler, and the list greys out placeholders it will not insert.
+        view.string = "int main() {\n    \n}\n"
+        let textView = document.engine.textView
+        textView.setSelectedRange(NSRange(location: (view.string as NSString).range(of: "    \n").location, length: 0))
+        textView.insertText("i", replacementRange: NSRange(location: NSNotFound, length: 0))
+        let provider = textView.completionProvider
+        let suggestions = provider?.completionItems(forPrefix: "i", document: view.string, context: .code).map(\.text) ?? []
+        let popupVisible = textView.isShowingCompletions && textView.completionItemCount > 0
+        record("completion-popup",
+               suggestions.contains("int") && suggestions.contains { $0.hasPrefix("if") },
+               "candidates=\(suggestions.prefix(3)) popup=\(popupVisible)")
+        // Give the popup a moment, then capture it for visual review.
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        snapshot(named: "completion-popup")
+
+        // 5c. The vocabulary is the SDK's, not a hand-written list: ask the index
+        //     about a name only the real headers provide.
+        let symbolIndex = HeaderSymbolIndex()
+        symbolIndex.buildSynchronously(compilerPath: "/usr/bin/clang++")
+        let headerHits = symbolIndex.names(withPrefix: "unordered_", limit: 10)
+        record("completion-from-headers",
+               headerHits.contains("unordered_map") && headerHits.contains("unordered_set"),
+               "count=\(symbolIndex.count) unordered=\(headerHits.prefix(4))")
+
+        // 5d. Placeholders are display-only: accepting a snippet must not type
+        //     "condition" into the buffer.
+        let ifSnippet = provider?
+            .completionItems(forPrefix: "if", document: "", context: .code)
+            .first { $0.text.contains("⟨condition⟩") }
+        let inserted = ifSnippet?.insertionText ?? ""
+        record("completion-placeholders-omitted",
+               ifSnippet != nil && !inserted.contains("condition") && inserted.contains("if ()"),
+               "inserted=\(escaped(String(inserted.prefix(40))))")
+
+        textView.cancelOperation(nil)
+        view.string = ""
+
         snapshot(named: "console-idle")
 
         // 6. A real build + run of the current tab. Building saves first, so the
@@ -359,6 +397,28 @@ final class SelfTestRunner {
         state.close(document: reopened, askToSave: false)
         await settle()
         snapshot(named: "welcome-after-close")
+
+        // 12. Opening a real file must show its text inside the editor, at a
+        //     non-zero size (a zero-width text container renders nothing).
+        let demoPath = FileManager.default.temporaryDirectory.appendingPathComponent("ridecpp-open-test.cpp")
+        try? "#include <iostream>\nint main() {\n    return 0;\n}\n".write(to: demoPath, atomically: true, encoding: .utf8)
+        state.open(urls: [demoPath])
+        if let opened = state.selectedDocument {
+            opened.focusEditor()
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            let frame = opened.engine.textView.frame
+            let containerWidth = opened.engine.textView.textContainer?.containerSize.width ?? 0
+            // Height is unbounded by design (greatestFiniteMagnitude), so only the
+            // width tells us the container was laid out.
+            let frameDescription = "\(Int(frame.width))x\(Int(frame.height))"
+            let containerDescription = "\(Int(containerWidth))"
+            record("open-file-visible",
+                   opened.engine.textView.string.contains("int main()")
+                       && frame.width > 100 && frame.height > 50
+                       && containerWidth > 100,
+                   "chars=\(opened.engine.textView.string.count) frame=\(frameDescription) containerWidth=\(containerDescription)")
+            snapshot(named: "opened-file")
+        }
 
         // 10. Opening a real file from disk.
         let tempFile = FileManager.default.temporaryDirectory

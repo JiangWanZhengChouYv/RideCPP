@@ -155,3 +155,6 @@
 "update.download" = "下载";
 
 "update.available.message" = "新版本 RideCPP %@ 已发布。";
+
+"settings.autoComplete" = "输入时显示补全建议";
+"edit.complete" = "代码补全";
