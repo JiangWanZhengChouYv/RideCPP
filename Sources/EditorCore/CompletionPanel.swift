@@ -70,8 +70,13 @@ final class CompletionPanel: NSPanel {
     func moveSelection(by delta: Int) {
         guard !items.isEmpty else { return }
         let count = items.count
+        let previous = selectedIndex
         selectedIndex = ((selectedIndex + delta) % count + count) % count
-        (contentView as? CompletionListContentView)?.needsDisplay = true
+        guard selectedIndex != previous else { return }
+        // The rows are drawn by the inner table view, not by the container, so
+        // redrawing the container left the highlight stuck on the old row even
+        // though the selection had moved.
+        (contentView as? CompletionListContentView)?.redrawRows()
         scrollToSelection()
     }
 
@@ -115,6 +120,10 @@ final class CompletionPanel: NSPanel {
     }
 
     fileprivate var selectedRow: Int { selectedIndex }
+
+    /// Test accessors: what the highlight currently points at.
+    var selectedRowForTesting: Int { selectedIndex }
+    var selectedTextForTesting: String? { item(at: selectedIndex)?.insertionText }
     fileprivate var rowSize: CGFloat { rowHeight }
     fileprivate var codeFont: NSFont { font }
 }
@@ -150,6 +159,11 @@ private final class CompletionListContentView: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// Repaints the rows after the selection changed.
+    func redrawRows() {
+        tableView.reloadData()
+    }
 
     func rebuild() {
         guard let panel else { return }

@@ -309,6 +309,12 @@ public final class CodeTextView: NSTextView {
     /// Number of suggestions currently offered.
     public var completionItemCount: Int { completionPanel?.count ?? 0 }
 
+    /// Index of the highlighted suggestion (0 when the list is closed).
+    public var selectedCompletionIndex: Int { completionPanel?.selectedRowForTesting ?? 0 }
+
+    /// Text of the highlighted suggestion, for tests and diagnostics.
+    public var selectedCompletionText: String? { completionPanel?.selectedTextForTesting }
+
     /// Hides the completion list, if any.
     func hideCompletions() {
         completionPanel?.dismiss()
@@ -428,6 +434,30 @@ public final class CodeTextView: NSTextView {
             return
         }
         apply(EditPlanner.apply(.deleteBackward, to: string, selection: selectedRange(), settings: editSettings))
+        // Deleting a character changes the prefix being completed, so the list
+        // must be re-filtered (and closed once the word is gone).
+        refreshCompletionsAfterDeleting()
+    }
+
+    /// Re-filters an open completion list after a deletion.
+    private func refreshCompletionsAfterDeleting() {
+        guard completionPanel?.isShowing == true, autoCompletionEnabled,
+              let provider = completionProvider else { return }
+        // The prefix is recomputed from the current text; the range stored when
+        // the list opened is stale after a deletion.
+        guard let candidate = completionPrefixAtCaret(), !candidate.prefix.isEmpty else {
+            hideCompletions()
+            return
+        }
+        let items = provider.completionItems(forPrefix: candidate.prefix,
+                                             document: string,
+                                             context: candidate.context)
+        guard !items.isEmpty else {
+            hideCompletions()
+            return
+        }
+        activeCompletionPrefix = candidate.prefix
+        presentItems(items, range: candidate.range)
     }
 
     /// ⌘/ — comment or uncomment the lines covered by the selection.

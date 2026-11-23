@@ -152,3 +152,108 @@ final class CompletionInsertionTests: XCTestCase {
         XCTAssertFalse(result.contains("·"))
     }
 }
+
+/// Navigation and list-refresh behaviour of the open completion list.
+final class CompletionNavigationTests: XCTestCase {
+
+    private func makeEditor() -> CodeTextView {
+        let engine = EditorEngine(settings: EditSettings(indentWidth: 4))
+        let view = engine.textView
+        view.string = "int main() {\n    \n}\n"
+        view.setSelectedRange(NSRange(location: 17, length: 0))
+        view.showCompletions(nil)
+        return view
+    }
+
+    private var downArrow: NSEvent {
+        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                         windowNumber: 0, context: nil, characters: "\u{F701}",
+                         charactersIgnoringModifiers: "\u{F701}", isARepeat: false, keyCode: 125)!
+    }
+
+    private var upArrow: NSEvent {
+        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                         windowNumber: 0, context: nil, characters: "\u{F700}",
+                         charactersIgnoringModifiers: "\u{F700}", isARepeat: false, keyCode: 126)!
+    }
+
+    func testArrowKeysMoveTheSelection() {
+        let view = makeEditor()
+        XCTAssertGreaterThan(view.completionItemCount, 2)
+        let start = view.selectedCompletionIndex
+        XCTAssertTrue(view.handleCompletionKey(downArrow))
+        XCTAssertEqual(view.selectedCompletionIndex, start + 1)
+        XCTAssertTrue(view.handleCompletionKey(downArrow))
+        XCTAssertEqual(view.selectedCompletionIndex, start + 2)
+        XCTAssertTrue(view.handleCompletionKey(upArrow))
+        XCTAssertEqual(view.selectedCompletionIndex, start + 1)
+    }
+
+    func testSelectionWrapsAroundBothEnds() {
+        let view = makeEditor()
+        let count = view.completionItemCount
+        // Up from the first row wraps to the last.
+        _ = view.handleCompletionKey(upArrow)
+        XCTAssertEqual(view.selectedCompletionIndex, count - 1)
+        // Down from the last wraps back to the first.
+        _ = view.handleCompletionKey(downArrow)
+        XCTAssertEqual(view.selectedCompletionIndex, 0)
+    }
+
+    func testAcceptingInsertsTheNavigatedToItem() {
+        let view = makeEditor()
+        _ = view.handleCompletionKey(downArrow)
+        let expected = view.selectedCompletionText
+        _ = view.handleCompletionKey(NSEvent.keyEvent(with: .keyDown, location: .zero,
+                                                      modifierFlags: [], timestamp: 0,
+                                                      windowNumber: 0, context: nil,
+                                                      characters: "\r",
+                                                      charactersIgnoringModifiers: "\r",
+                                                      isARepeat: false, keyCode: 36)!)
+        XCTAssertFalse(view.isShowingCompletions)
+        if let expected, !expected.contains("\n") {
+            XCTAssertTrue(view.string.contains(expected), "expected \(expected.debugDescription) in \(view.string.debugDescription)")
+        }
+    }
+
+    func testDeletingRefiltersTheOpenList() {
+        // Type "vec", then delete back: the candidate list must follow each step.
+        let engine = EditorEngine(settings: EditSettings(indentWidth: 4))
+        let view = engine.textView
+        view.string = "int main() {\n    \n}\n"
+        view.setSelectedRange(NSRange(location: 17, length: 0))
+        for character in "vec" {
+            view.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
+        XCTAssertTrue(view.isShowingCompletions)
+        let atVec = view.completionItemCount
+
+        view.deleteBackward(nil)
+        XCTAssertTrue(view.isShowingCompletions, "list closed after one deletion")
+        let atVe = view.completionItemCount
+        // "ve" is a broader prefix than "vec", so it offers at least as many.
+        XCTAssertGreaterThanOrEqual(atVe, atVec)
+
+        view.deleteBackward(nil)
+        view.deleteBackward(nil)
+        // With the word gone there is nothing to complete.
+        XCTAssertFalse(view.isShowingCompletions)
+    }
+
+    func testDeletingKeepsListOpenWhilePrefixRemains() {
+        let view = makeEditor()
+        let before = view.completionItemCount
+        view.deleteBackward(nil)
+        // Deleting the space leaves an empty prefix, so the list is dismissed.
+        XCTAssertFalse(view.isShowingCompletions, "expected dismissal once the word is gone")
+
+        // Re-open and delete within a word instead.
+        view.insertText("v", replacementRange: NSRange(location: NSNotFound, length: 0))
+        view.insertText("e", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(view.isShowingCompletions)
+        XCTAssertGreaterThan(view.completionItemCount, 0)
+        view.deleteBackward(nil)
+        XCTAssertTrue(view.isShowingCompletions, "list closed even though a prefix remains")
+        _ = before
+    }
+}
