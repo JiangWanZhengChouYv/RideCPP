@@ -21,6 +21,13 @@ public struct CompletionItem: Equatable, Sendable, Identifiable {
     public var insertionText: String {
         Placeholder.strip(from: text)
             .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { line -> String in
+                var text = String(line)
+                while text.last == " " || text.last == "\t" { text.removeLast() }
+                return text
+            }
+            .joined(separator: "\n")
+            .split(separator: "\n", omittingEmptySubsequences: false)
             .map { line in
                 var body = String(line)
                 while body.hasPrefix(String(BuiltinCompletionProvider.indentMarker)) {
@@ -145,7 +152,7 @@ public final class BuiltinCompletionProvider: CompletionProviding {
         ("if", "if (⟨condition⟩) {\n·⟨body⟩\n}", "if statement"),
         ("ife", "if (⟨condition⟩) {\n·⟨body⟩\n} else {\n·⟨else body⟩\n}", "if / else"),
         ("switch", "switch (⟨value⟩) {\ncase 0:\n·⟨body⟩\n·break;\ndefault:\n·break;\n}", "switch statement"),
-        ("vec", "std::vector<⟨T⟩> ⟨name⟩;", "std::vector declaration"),
+        ("vec", "⟨namespace⟩vector<int>", "vector declaration"),
         ("class", "class ⟨Name⟩ {\npublic:\n·⟨Name⟩() = default;\n};", "class definition")
     ]
 
@@ -171,6 +178,9 @@ public final class BuiltinCompletionProvider: CompletionProviding {
 
         let lowered = query.lowercased()
         guard !lowered.isEmpty, lowered.count <= 32 else { return [] }
+        // With `using namespace std;` in the file, `std::` prefixing is noise: the
+        // user writes `vector`, not `std::vector`.
+        let standardNamespaceIsOpen = Self.hasUsingNamespaceStd(document)
         var items: [CompletionItem] = []
         var seen = Set<String>()
 
@@ -184,25 +194,162 @@ public final class BuiltinCompletionProvider: CompletionProviding {
 
         // A snippet whose trigger matches exactly is the most likely intent.
         for snippet in Self.snippets where snippet.name.lowercased() == lowered {
-            add(snippet.body, snippet.detail, id: "snip:\(snippet.name)")
+            add(Self.expandingSnippet(snippet.body, standardNamespaceIsOpen: standardNamespaceIsOpen),
+                snippet.detail,
+                id: "snip:\(snippet.name)")
         }
+
+        // Everything else competes on usage rank rather than being concatenated:
+        // with a one-letter prefix the keyword list alone used to fill all 40
+        // slots, so `cout` never appeared until three letters were typed.
+        var candidates: [RankedCandidate] = []
         for keyword in KeywordTable.keywords() where keyword.hasPrefix(lowered) {
-            add(keyword, "keyword", id: "kw:\(keyword)")
+            guard !Self.isNoise(keyword) else { continue }
+            candidates.append(RankedCandidate(name: keyword, detail: "keyword",
+                                              score: Self.usageScore(keyword, query: lowered, kind: .keyword)))
         }
         // Only the headers this file includes contribute vocabulary, so cost stays
         // proportional to what is actually used (one header, or one
         // `bits/stdc++.h` that pulls everything).
         let headers = HeaderPaths.includes(in: document)
-        for name in index.names(from: headers, prefix: query, limit: 30) {
-            add(name, "header", id: "hdr:\(name)")
+        for name in index.names(from: headers, prefix: query, limit: 40) {
+            // Namespace and macro scaffolding is never what the user is typing.
+            guard !Self.isNoise(name) else { continue }
+            candidates.append(RankedCandidate(name: name, detail: "header",
+                                              score: Self.usageScore(name, query: lowered, kind: .header)))
         }
         for symbol in Self.localIdentifiers(in: document) where symbol.lowercased().hasPrefix(lowered) {
-            add(symbol, "in this file", id: "sym:\(symbol)")
+            // `using namespace std;` makes `std` look like a local identifier; it
+            // is still never a thing to type.
+            guard !Self.isNoise(symbol) else { continue }
+            candidates.append(RankedCandidate(name: symbol, detail: "in this file",
+                                              score: Self.usageScore(symbol, query: lowered, kind: .local)))
         }
+
+        candidates.sort { lhs, rhs in
+            if lhs.score != rhs.score { return lhs.score > rhs.score }
+            return lhs.name < rhs.name
+        }
+        for candidate in candidates {
+            add(candidate.name, candidate.detail, id: "rank:\(candidate.name)")
+        }
+
         for snippet in Self.snippets where snippet.name.lowercased().hasPrefix(lowered) && snippet.name.lowercased() != lowered {
-            add(snippet.body, snippet.detail, id: "snip:\(snippet.name)")
+            add(Self.expandingSnippet(snippet.body, standardNamespaceIsOpen: standardNamespaceIsOpen),
+                snippet.detail,
+                id: "snip:\(snippet.name)")
         }
         return Array(items.prefix(40))
+    }
+
+    /// Names that are technically valid but never useful as a suggestion: the
+    /// `std` namespace itself, and internal-looking identifiers.
+    static func isNoise(_ name: String) -> Bool {
+        if name == "std" || name.hasPrefix("std__") { return true }
+        // `__x`-style implementation names leak in from macros.
+        if name.hasPrefix("__") { return true }
+        return false
+    }
+
+    /// A completion candidate with its usefulness score.
+    struct RankedCandidate {
+        let name: String
+        let detail: String
+        let score: Double
+    }
+
+    enum CandidateKind {
+        case keyword
+        case header
+        case local
+    }
+
+    /// Names that are worth surfacing from the first keystroke, in rough order of
+    /// how often they appear in everyday C++ code.
+    ///
+    /// This is an ordering hint, not a vocabulary: every name here must still come
+    /// from the compiler or the included headers to be offered at all. Its only
+    /// job is to decide *which* real candidates survive the 40-item cap — without
+    /// it, alphabetical luck decided, and `cout` lost to `class`.
+    static let commonNames: [String: Double] = {
+        let tiers: [(Double, [String])] = [
+            (100, ["cout", "cin", "endl", "vector", "string", "int", "return", "sort",
+                   "size", "push_back", "size()", "max", "min", "swap", "for", "if", "while"]),
+            (80, ["cerr", "printf", "scanf", "map", "set", "queue", "stack", "pair",
+                  "begin", "end", "first", "second", "abs", "sqrt", "reverse", "memset",
+                  "int64_t", "long", "double", "float", "char", "bool", "void", "auto",
+                  "const", "static", "struct", "class"]),
+            (60, ["unordered_map", "unordered_set", "deque", "priority_queue", "vector<",
+                  "string_view", "to_string", "stoi", "stol", "getline", "substr", "find",
+                  "insert", "erase", "clear", "empty", "count", "accumulate", "fill",
+                  "lower_bound", "upper_bound", "binary_search", "unique", "erase_unique"]),
+            (40, ["unsigned", "size_t", "nullptr", "true", "false", "break", "continue",
+                  "else", "switch", "case", "default", "do", "goto", "try", "catch",
+                  "throw", "new", "delete", "namespace", "using", "include", "define",
+                  "template", "typename", "public", "private", "protected", "virtual",
+                  "inline", "explicit", "operator", "friend", "mutable", "volatile",
+                  "typedef", "sizeof"])
+        ]
+        var table: [String: Double] = [:]
+        for (score, names) in tiers {
+            for name in names { table[name] = score }
+        }
+        return table
+    }()
+
+    /// Score for one candidate. Higher wins.
+    ///
+    /// A short prefix needs usage information most, so the common-name table gets
+    /// the most weight there; as the user types more, an exact/near-exact name
+    /// match and a shorter name naturally take over.
+    static func usageScore(_ name: String, query: String, kind: CandidateKind) -> Double {
+        let lowered = name.lowercased()
+        var score = 0.0
+
+        // Prefix quality: exact beats longer.
+        if lowered == query { score += 60 }
+        else if lowered.hasPrefix(query) { score += 30 }
+        score -= Double(max(0, lowered.count - query.count)) * 0.6
+
+        // Where the name came from: names the file already uses are the most
+        // relevant, then names from the headers it includes, then keywords.
+        switch kind {
+        // Names already used in this file are what the user is most likely to
+        // retype, so they must beat keywords even when the keyword is "common".
+        case .local: score += 160
+        case .header: score += 30
+        case .keyword: score += 12
+        }
+
+        // Usage hint, weighted more heavily when the prefix is short.
+        let usage = commonNames[lowered] ?? 0
+        let shortPrefixBoost = query.count <= 2 ? 1.0 : (query.count == 3 ? 0.5 : 0.25)
+        score += usage * shortPrefixBoost
+
+        // All-caps and underscore-heavy names are usually internals.
+        if lowered.contains("_") { score -= 6 }
+        if lowered.allSatisfy({ !$0.isLowercase }) { score -= 12 }
+        return score
+    }
+
+    /// Fills in snippet placeholders that depend on the document.
+    ///
+    /// `⟨namespace⟩` expands to `"std::"` or to nothing, so the same snippet text
+    /// works for a file with `using namespace std;` and one without it.
+    static func expandingSnippet(_ body: String, standardNamespaceIsOpen: Bool) -> String {
+        body.replacingOccurrences(of: "⟨namespace⟩", with: standardNamespaceIsOpen ? "" : "std::")
+    }
+
+    /// True when the document opens the `std` namespace without qualification.
+    ///
+    /// Only `using namespace std;` counts; `using std::vector;` brings in one name
+    /// and does not justify dropping the prefix everywhere.
+    public static func hasUsingNamespaceStd(_ document: String) -> Bool {
+        let code = DocumentSymbolIndex.strippingCommentsAndLiterals(document)
+        // Match the statement anywhere, not just at the start of a line: it can be
+        // written inline (`int main() { using namespace std; }`).
+        let pattern = #"using\s+namespace\s+std\s*;"#
+        return code.range(of: pattern, options: .regularExpression) != nil
     }
 
     /// Identifiers already present in the document, most recently used first.

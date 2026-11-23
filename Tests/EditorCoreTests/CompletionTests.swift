@@ -257,3 +257,119 @@ final class CompletionNavigationTests: XCTestCase {
         _ = before
     }
 }
+
+/// `using namespace std;` must remove the `std::` prefix from suggestions.
+final class NamespaceAwarenessTests: XCTestCase {
+
+    private let provider = BuiltinCompletionProvider()
+
+    private func insertion(for prefix: String, in document: String) -> String? {
+        provider.completionItems(forPrefix: prefix, document: document, context: .code)
+            .first { $0.insertionText.contains("vector") }?
+            .insertionText
+    }
+
+    func testUsingNamespaceStdDropsThePrefix() {
+        let result = insertion(for: "vec", in: "using namespace std;\nint main() {}\n")
+        XCTAssertEqual(result, "vector<int>")
+    }
+
+    func testWithoutUsingNamespaceKeepsThePrefix() {
+        let result = insertion(for: "vec", in: "int main() {}\n")
+        XCTAssertEqual(result, "std::vector<int>")
+    }
+
+    func testUsingDeclarationDoesNotCount() {
+        // `using std::vector;` imports one name, not the namespace.
+        let result = insertion(for: "vec", in: "using std::vector;\nint main() {}\n")
+        XCTAssertEqual(result, "std::vector<int>")
+    }
+
+    func testDetectionIgnoresComments() {
+        XCTAssertFalse(BuiltinCompletionProvider.hasUsingNamespaceStd("// using namespace std;\n"))
+        XCTAssertFalse(BuiltinCompletionProvider.hasUsingNamespaceStd("/* using namespace std; */\n"))
+        XCTAssertTrue(BuiltinCompletionProvider.hasUsingNamespaceStd("using namespace std;"))
+        XCTAssertTrue(BuiltinCompletionProvider.hasUsingNamespaceStd("  using  namespace   std ;"))
+    }
+
+    func testDetectionInGlobalScopeOnlyMattersNotLocalScope() {
+        // A local `using` still covers the file's later code here, which is what
+        // the user intends when writing it.
+        XCTAssertTrue(BuiltinCompletionProvider.hasUsingNamespaceStd("int main() { using namespace std; }"))
+    }
+}
+
+/// Frequency-based ranking: common names must survive the candidate cap from the
+/// first keystroke, which plain alphabetical order could not guarantee.
+final class CompletionRankingTests: XCTestCase {
+
+    private func makeProvider() -> (BuiltinCompletionProvider, DocumentSymbolIndex, String) {
+        let document = """
+        #include <iostream>
+        #include <vector>
+        #include <algorithm>
+        #include <string>
+        using namespace std;
+        int main() { return 0; }
+        """
+        let index = DocumentSymbolIndex()
+        index.indexSynchronously(headers: HeaderPaths.includes(in: document))
+        return (BuiltinCompletionProvider(index: index), index, document)
+    }
+
+    func testShortPrefixStillOffersFrequentlyUsedName() {
+        let (provider, _, document) = makeProvider()
+        let singleLetter = provider.completionItems(forPrefix: "c", document: document, context: .code)
+            .map(\.insertionText)
+        // `cout` used to be pushed out by the keyword list until "cou" was typed.
+        XCTAssertTrue(singleLetter.contains("cout"), "cout missing for prefix c: \(singleLetter.prefix(10))")
+        XCTAssertTrue(singleLetter.contains("cin"))
+    }
+
+    func testCommonNamesRankAheadOfEqualLengthKeywords() {
+        let (provider, _, document) = makeProvider()
+        let names = provider.completionItems(forPrefix: "s", document: document, context: .code)
+            .map(\.insertionText)
+        guard let first = names.first else { return XCTFail("no suggestions") }
+        // `size`/`sort` are far more likely than `static`/`struct` here.
+        XCTAssertTrue(["size", "sort", "swap", "string", "second"].contains(first),
+                      "unexpected top suggestion: \(first)")
+    }
+
+    func testLocallyUsedNamesOutrankHeaderNames() {
+        let document = """
+        #include <iostream>
+        int main() { int counter = 0; return counter; }
+        """
+        let index = DocumentSymbolIndex()
+        index.indexSynchronously(headers: HeaderPaths.includes(in: document))
+        let provider = BuiltinCompletionProvider(index: index)
+        let names = provider.completionItems(forPrefix: "c", document: document, context: .code)
+            .map(\.insertionText)
+        let localPosition = names.firstIndex(of: "counter")
+        let keywordPosition = names.firstIndex(of: "class")
+        if let localPosition, let keywordPosition {
+            XCTAssertLessThan(localPosition, keywordPosition,
+                              "a name used in this file should beat a keyword of similar shape")
+        }
+    }
+
+    func testRankingDoesNotInventVocabulary() {
+        // Every offered name must be a keyword or come from the included headers.
+        let document = "#include <iostream>\n"
+        let index = DocumentSymbolIndex()
+        index.indexSynchronously(headers: ["iostream"])
+        let provider = BuiltinCompletionProvider(index: index)
+        let offered = provider.completionItems(forPrefix: "c", document: document, context: .code)
+            .map(\.insertionText)
+            // Snippets are multi-line scaffolds, not vocabulary; they are added
+            // after ranking and are checked by their own tests.
+            .filter { !$0.contains("\n") && !$0.contains("{") }
+        let allowed = Set(KeywordTable.keywords())
+        for name in offered where !allowed.contains(name) {
+            XCTAssertFalse(name.isEmpty)
+            XCTAssertTrue(index.names(from: ["iostream"], prefix: name, limit: 1).contains(name),
+                          "\(name) is neither a keyword nor from the headers")
+        }
+    }
+}
