@@ -32,7 +32,7 @@ public final class AppState: ObservableObject {
     /// Statistics of the most recent program run, kept for the status bar/tests.
     @Published public private(set) var lastRunDuration: TimeInterval = 0
     @Published public private(set) var lastRunCPUTime: TimeInterval = 0
-    @Published public private(set) var lastRunPeakMemoryBytes: UInt64?
+    @Published public var lastRunPeakMemoryBytes: UInt64?
     /// Lines typed before the program started; delivered as soon as it runs.
     @Published public private(set) var queuedInputLines: [String] = []
     @Published public var isOutputVisible = true
@@ -84,6 +84,11 @@ public final class AppState: ObservableObject {
 
         // Look for a newer release in the background; failures are silent.
         checkForUpdates()
+
+        // Verify the keyword set in the background (one ~25 ms compiler run, then
+        // cached on disk). Header vocabulary is indexed on demand per document,
+        // never at launch.
+        KeywordTable.prepare(compilerPath: settings.compilerPath)
 
         // No document is created at launch on purpose: opening straight into a
         // blank "Untitled 1" hides the choice of starting a new file or opening

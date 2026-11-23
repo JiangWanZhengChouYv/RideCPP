@@ -16,9 +16,19 @@ public struct CompletionItem: Equatable, Sendable, Identifiable {
         self.detail = detail
     }
 
-    /// Text with placeholders removed, which is what accepting the item inserts.
+    /// Text with placeholders and indent markers removed, which is what
+    /// accepting the item inserts (the editor re-applies indentation).
     public var insertionText: String {
         Placeholder.strip(from: text)
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { line in
+                var body = String(line)
+                while body.hasPrefix(String(BuiltinCompletionProvider.indentMarker)) {
+                    body.removeFirst()
+                }
+                return body
+            }
+            .joined(separator: "\n")
     }
 
     /// The parts to draw, in order, so placeholders can be greyed out.
@@ -104,9 +114,10 @@ public extension CompletionProviding {
 ///
 /// Sources, in order of authority:
 /// 1. **Keywords** — verified against the active compiler (`KeywordTable`).
-/// 2. **Standard library names** — harvested from the SDK headers that compiler
-///    ships (`HeaderSymbolIndex`), so `vector`, `cout`, `sort`, … come from the
-///    real headers rather than a list written by hand.
+/// 2. **Names from this file's includes** — harvested on demand from the headers
+///    the document actually `#include`s (`DocumentSymbolIndex`), so `vector`,
+///    `cout`, `sort`, … come from the real headers rather than a list written by
+///    hand, and nothing is scanned for headers the file does not use.
 /// 3. **Names already used in this file** — so partially typed locals complete.
 /// 4. **A few structural snippets** — loop/function scaffolds. These exist
 ///    because a suggestion list cannot create multi-line structure, and their
@@ -121,24 +132,30 @@ public final class BuiltinCompletionProvider: CompletionProviding {
 
     /// Multi-line scaffolds. Placeholders mark the parts the user fills in and
     /// are shown grey, never inserted.
+    ///
+    /// Bodies are written with a single-space indent marker (`·`), which is
+    /// replaced by the editor's own indent unit at insertion time. Hard-coding
+    /// four spaces made snippets look wrong next to two-space or tab-indented
+    /// files, and looked wrong next to the surrounding code.
     public static let snippets: [(name: String, body: String, detail: String)] = [
-        ("main", "int main() {\n    ⟨body⟩\n    return 0;\n}", "main function"),
-        ("for", "for (int i = 0; i < ⟨n⟩; ++i) {\n    ⟨body⟩\n}", "indexed loop"),
-        ("forr", "for (const auto& ⟨item⟩ : ⟨container⟩) {\n    ⟨body⟩\n}", "range-based for"),
-        ("while", "while (⟨condition⟩) {\n    ⟨body⟩\n}", "while loop"),
-        ("if", "if (⟨condition⟩) {\n    ⟨body⟩\n}", "if statement"),
-        ("ife", "if (⟨condition⟩) {\n    ⟨body⟩\n} else {\n    ⟨else body⟩\n}", "if / else"),
-        ("switch", "switch (⟨value⟩) {\ncase 0:\n    ⟨body⟩\n    break;\ndefault:\n    break;\n}", "switch statement"),
+        ("main", "int main() {\n·⟨body⟩\n·return 0;\n}", "main function"),
+        ("for", "for (int i = 0; i < ⟨n⟩; ++i) {\n·⟨body⟩\n}", "indexed loop"),
+        ("forr", "for (const auto& ⟨item⟩ : ⟨container⟩) {\n·⟨body⟩\n}", "range-based for"),
+        ("while", "while (⟨condition⟩) {\n·⟨body⟩\n}", "while loop"),
+        ("if", "if (⟨condition⟩) {\n·⟨body⟩\n}", "if statement"),
+        ("ife", "if (⟨condition⟩) {\n·⟨body⟩\n} else {\n·⟨else body⟩\n}", "if / else"),
+        ("switch", "switch (⟨value⟩) {\ncase 0:\n·⟨body⟩\n·break;\ndefault:\n·break;\n}", "switch statement"),
         ("vec", "std::vector<⟨T⟩> ⟨name⟩;", "std::vector declaration"),
-        ("class", "class ⟨Name⟩ {\npublic:\n    ⟨Name⟩() = default;\n};", "class definition")
+        ("class", "class ⟨Name⟩ {\npublic:\n·⟨Name⟩() = default;\n};", "class definition")
     ]
 
-    private let index: HeaderSymbolIndex
-    private let compilerPath: String?
+    /// The character that marks one level of indentation inside a snippet body.
+    public static let indentMarker: Character = "·"
 
-    public init(index: HeaderSymbolIndex = .shared, compilerPath: String? = nil) {
+    private let index: DocumentSymbolIndex
+
+    public init(index: DocumentSymbolIndex = .shared) {
         self.index = index
-        self.compilerPath = compilerPath
     }
 
     public func completionItems(forPrefix prefix: String,
@@ -169,11 +186,15 @@ public final class BuiltinCompletionProvider: CompletionProviding {
         for snippet in Self.snippets where snippet.name.lowercased() == lowered {
             add(snippet.body, snippet.detail, id: "snip:\(snippet.name)")
         }
-        for keyword in KeywordTable.keywords(compilerPath: compilerPath) where keyword.hasPrefix(lowered) {
+        for keyword in KeywordTable.keywords() where keyword.hasPrefix(lowered) {
             add(keyword, "keyword", id: "kw:\(keyword)")
         }
-        for name in index.names(withPrefix: query, limit: 30) {
-            add(name, "standard library", id: "hdr:\(name)")
+        // Only the headers this file includes contribute vocabulary, so cost stays
+        // proportional to what is actually used (one header, or one
+        // `bits/stdc++.h` that pulls everything).
+        let headers = HeaderPaths.includes(in: document)
+        for name in index.names(from: headers, prefix: query, limit: 30) {
+            add(name, "header", id: "hdr:\(name)")
         }
         for symbol in Self.localIdentifiers(in: document) where symbol.lowercased().hasPrefix(lowered) {
             add(symbol, "in this file", id: "sym:\(symbol)")

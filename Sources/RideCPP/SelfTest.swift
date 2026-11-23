@@ -157,14 +157,19 @@ final class SelfTestRunner {
         try? await Task.sleep(nanoseconds: 300_000_000)
         snapshot(named: "completion-popup")
 
-        // 5c. The vocabulary is the SDK's, not a hand-written list: ask the index
-        //     about a name only the real headers provide.
-        let symbolIndex = HeaderSymbolIndex()
-        symbolIndex.buildSynchronously(compilerPath: "/usr/bin/clang++")
-        let headerHits = symbolIndex.names(withPrefix: "unordered_", limit: 10)
-        record("completion-from-headers",
-               headerHits.contains("unordered_map") && headerHits.contains("unordered_set"),
-               "count=\(symbolIndex.count) unordered=\(headerHits.prefix(4))")
+        // 5c. Vocabulary is per-document: only headers this file includes
+        //     contribute, and nothing is scanned at launch.
+        let documentIndex = DocumentSymbolIndex()
+        let sample = "#include <vector>\n#include <string>\n"
+        let headers = HeaderPaths.includes(in: sample)
+        documentIndex.indexSynchronously(headers: headers)
+        let vectorHits = documentIndex.names(from: headers, prefix: "vector", limit: 10)
+        let unrelated = documentIndex.names(from: headers, prefix: "unordered_", limit: 10)
+        record("completion-on-demand-index",
+               headers == ["vector", "string"]
+                   && vectorHits.contains("vector")
+                   && unrelated.isEmpty,
+               "headers=\(headers) vector=\(vectorHits.prefix(3)) unordered=\(unrelated.count) indexed=\(documentIndex.indexedHeaderCount)")
 
         // 5d. Placeholders are display-only: accepting a snippet must not type
         //     "condition" into the buffer.
@@ -224,8 +229,13 @@ final class SelfTestRunner {
             return 0;
         }
         """
+        // Reset first: `isRunning` can drop a frame before `.runFinished` lands the
+        // statistics, so waiting on those two flags alone raced the measurement.
+        state.lastRunPeakMemoryBytes = nil
         state.build(andRun: true)
-        let allocRan = await waitUntil(timeout: 60) { !state.isBuilding && !state.isRunning }
+        let allocRan = await waitUntil(timeout: 60) {
+            !state.isBuilding && !state.isRunning && state.lastRunPeakMemoryBytes != nil
+        }
         let peak = state.lastRunPeakMemoryBytes ?? 0
         record("run-memory",
                allocRan && peak > 20 * 1024 * 1024,

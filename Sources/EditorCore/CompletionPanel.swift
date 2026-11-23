@@ -30,13 +30,18 @@ final class CompletionPanel: NSPanel {
         isOpaque = false
         backgroundColor = .clear
         hidesOnDeactivate = false
+        // The editor must keep keyboard focus: the panel is a passive list, so
+        // arrow keys and Return reach the text view and it drives the selection.
         becomesKeyOnlyIfNeeded = true
+        ignoresMouseEvents = false
         collectionBehavior = [.transient, .ignoresCycle]
         contentView = CompletionListContentView(panel: self)
     }
 
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+    /// Never steal focus from the text view.
+    override var acceptsFirstResponder: Bool { false }
 
     var count: Int { items.count }
 
@@ -49,7 +54,9 @@ final class CompletionPanel: NSPanel {
         setContentSize(NSSize(width: width, height: height))
         setFrameOrigin(origin(below: caretScreenRect, height: height))
         (contentView as? CompletionListContentView)?.rebuild()
-        orderFrontRegardless()
+        // `orderFront` (not `orderFrontRegardless`) keeps the current key window,
+        // so the editor keeps receiving the keystrokes that drive this list.
+        orderFront(nil)
     }
 
     func dismiss() {

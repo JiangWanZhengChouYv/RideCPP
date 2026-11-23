@@ -188,15 +188,7 @@ public final class CodeTextView: NSTextView {
             return
         }
         activeCompletionPrefix = candidate.prefix
-        completionRange = candidate.range
-        let panel = completionPanelInstance()
-        panel.onAccept = { [weak self] item in
-            self?.accept(item)
-        }
-        panel.onCancel = { [weak self] in
-            self?.completionRange = nil
-        }
-        panel.show(items: items, near: caretScreenRect(), font: font ?? .monospacedSystemFont(ofSize: 12, weight: .regular))
+        presentItems(items, range: candidate.range)
     }
 
     /// The word being typed at the caret, plus the context that decides which
@@ -240,17 +232,64 @@ public final class CodeTextView: NSTextView {
     }
 
     /// Inserts the accepted suggestion, replacing the prefix being typed.
+    ///
+    /// Multi-line snippets are re-indented to match the line they are inserted
+    /// on, using the document's own indent unit, so accepting `if` inside a
+    /// four-space block does not jump to column 0.
     private func accept(_ item: CompletionItem) {
-        let insertion = item.insertionText
-        guard !insertion.isEmpty else { return }
-        // Snippets carry their own braces and indentation, so they are inserted
-        // verbatim rather than run through the auto-indent planner.
+        guard !item.insertionText.isEmpty else { return }
         let range = EditPlanner.clampRange(completionRange
             ?? BuiltinCompletionProvider.prefix(at: selectedRange().location, in: string).range,
             in: string)
+        let insertion = indentSnippet(item.insertionText, at: range.location)
+        // One edit for the whole snippet: inserting it character by character let
+        // the auto-pair and auto-indent planner re-process braces and newlines,
+        // which is what produced growing, misaligned output.
         insertCompletionText(insertion, replacing: range)
         completionRange = nil
         activeCompletionPrefix = ""
+    }
+
+    /// Rewrites a snippet so each line carries the current line's indentation
+    /// plus the document's indent unit per nesting level.
+    private func indentSnippet(_ snippet: String, at location: Int) -> String {
+        let ns = string as NSString
+        let lineRange = EditPlanner.lineRange(at: location, in: ns)
+        let beforeCaret = ns.substring(with: NSRange(location: lineRange.location,
+                                                     length: max(0, location - lineRange.location)))
+        // Indentation already sitting on this line. The replacement range starts
+        // *after* it, so the first line must not receive it again — that
+        // duplication is what produced six spaces inside a four-space block.
+        let baseIndent = String(beforeCaret.prefix { $0 == " " || $0 == "\t" })
+        let unit = editSettings.indentUnit
+        // Track brace nesting so body lines land one level inside the block.
+        var braceDepth = 0
+        return snippet
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .enumerated()
+            .map { offset, line -> String in
+                var body = String(line)
+                var depth = 0
+                while body.hasPrefix(String(BuiltinCompletionProvider.indentMarker)) {
+                    body.removeFirst()
+                    depth += 1
+                }
+                // A closing brace belongs to the enclosing level.
+                let trimmed = body.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("}") { braceDepth = max(0, braceDepth - 1) }
+                // The first line continues the current one, so it already sits at
+                // `baseIndent`. Later lines restart from the enclosing indent and
+                // add one unit per nesting level (a bare marker line is one level
+                // deeper than the statement itself).
+                // Inside the snippet, `{` opens one level and `}` closes one, so a
+                // marker line ends up indented relative to the statement.
+                let prefix = offset == 0 ? "" : baseIndent
+                let nesting = offset == 0 ? 0 : max(depth, braceDepth)
+                let indented = prefix + String(repeating: unit, count: nesting) + body
+                if trimmed.hasSuffix("{") { braceDepth += 1 }
+                return indented
+            }
+            .joined(separator: "\n")
     }
 
     /// Replaces `range` with `text` through the normal text-system path so undo
@@ -288,11 +327,25 @@ public final class CodeTextView: NSTextView {
         case 126:  // up arrow
             panel.moveSelection(by: -1)
             return true
-        case 36, 76, 48:  // return, enter, tab
+        case 36, 76:  // return, enter
+            panel.acceptSelection()
+            return true
+        case 48:  // tab
             panel.acceptSelection()
             return true
         case 53:  // escape
             panel.cancel()
+            return true
+        default:
+            break
+        }
+        // Function keys can be remapped, so fall back to the characters.
+        switch event.charactersIgnoringModifiers {
+        case "\u{F701}":  // down arrow (private-use code)
+            panel.moveSelection(by: 1)
+            return true
+        case "\u{F700}":  // up arrow
+            panel.moveSelection(by: -1)
             return true
         default:
             return false
@@ -305,8 +358,35 @@ public final class CodeTextView: NSTextView {
     }
 
     /// ⌃Space — open the completion list explicitly.
+    ///
+    /// Unlike typing, an explicit request on an empty prefix lists the vocabulary
+    /// from the start instead of doing nothing.
     @objc public func showCompletions(_ sender: Any?) {
-        showCompletionsIfUseful()
+        guard let provider = completionProvider else { return }
+        guard let candidate = completionPrefixAtCaret() else {
+            // No word at the caret: offer the common starting points.
+            presentItems(provider.completionItems(forPrefix: "i", document: string, context: .code),
+                         range: NSRange(location: selectedRange().location, length: 0))
+            return
+        }
+        presentItems(provider.completionItems(forPrefix: candidate.prefix,
+                                              document: string,
+                                              context: candidate.context),
+                     range: candidate.range)
+    }
+
+    /// Shows `items` in the popup, replacing `range` if one is accepted.
+    private func presentItems(_ items: [CompletionItem], range: NSRange) {
+        guard !items.isEmpty else {
+            hideCompletions()
+            return
+        }
+        completionRange = range
+        let panel = completionPanelInstance()
+        panel.onAccept = { [weak self] item in self?.accept(item) }
+        panel.onCancel = { [weak self] in self?.completionRange = nil }
+        let displayFont = font ?? .monospacedSystemFont(ofSize: 12, weight: .regular)
+        panel.show(items: items, near: caretScreenRect(), font: displayFont)
     }
 
     public override func cancelOperation(_ sender: Any?) {
