@@ -45,9 +45,15 @@ final class ConsoleTextView: NSTextView {
         isSelectable = true
         allowsUndo = false
         drawsBackground = true
-        backgroundColor = .textBackgroundColor
-        textColor = .labelColor
-        insertionPointColor = .controlAccentColor
+        // A terminal look that does not follow the system theme: output is always
+        // light text on a dark panel, which is what people expect from a console
+        // and what keeps program output legible in light mode too.
+        backgroundColor = Self.terminalBackground
+        textColor = Self.terminalText
+        insertionPointColor = Self.terminalCaret
+        // Force the dark appearance so NSTextView's own drawing (selection,
+        // scroller, spell-check underline) matches the fixed colours.
+        appearance = NSAppearance(named: .darkAqua)
         font = Self.outputFont
         textContainerInset = NSSize(width: 8, height: 6)
         textContainer?.lineFragmentPadding = 2
@@ -57,17 +63,29 @@ final class ConsoleTextView: NSTextView {
         textContainer?.widthTracksTextView = true
         textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
         typingAttributes = Self.inputAttributes
-        selectedTextAttributes = [.backgroundColor: NSColor.selectedTextBackgroundColor]
+        selectedTextAttributes = [.backgroundColor: Self.terminalSelection]
     }
 
     static var outputFont: NSFont { .monospacedSystemFont(ofSize: 11, weight: .regular) }
 
+    // MARK: - Terminal palette
+
+    /// Background of the console: near-black, slightly blue, like a terminal.
+    static let terminalBackground = NSColor(srgbRed: 0.07, green: 0.08, blue: 0.10, alpha: 1)
+    /// Program output: a soft white, not pure #FFF, to reduce glare.
+    static let terminalText = NSColor(srgbRed: 0.90, green: 0.92, blue: 0.95, alpha: 1)
+    /// What the user types: a warm accent that stands out against the output.
+    static let terminalInputText = NSColor(srgbRed: 0.55, green: 0.85, blue: 0.95, alpha: 1)
+    /// Selection and caret.
+    static let terminalCaret = NSColor(srgbRed: 0.55, green: 0.85, blue: 0.95, alpha: 1)
+    static let terminalSelection = NSColor(srgbRed: 0.20, green: 0.35, blue: 0.50, alpha: 1)
+
     static var outputAttributes: [NSAttributedString.Key: Any] {
-        [.font: outputFont, .foregroundColor: NSColor.labelColor]
+        [.font: outputFont, .foregroundColor: terminalText]
     }
 
     static var inputAttributes: [NSAttributedString.Key: Any] {
-        [.font: outputFont, .foregroundColor: NSColor.controlAccentColor]
+        [.font: outputFont, .foregroundColor: terminalInputText]
     }
 
     // MARK: - Transcript
@@ -85,6 +103,11 @@ final class ConsoleTextView: NSTextView {
 
         textStorage?.beginEditing()
         textStorage?.replaceCharacters(in: NSRange(location: insertionPoint, length: 0), with: text)
+        // Newly inserted text inherits whatever attributes the storage merges in;
+        // set the output colour explicitly or program output can end up drawn in
+        // the input colour (or plain black).
+        textStorage?.setAttributes(Self.outputAttributes,
+                                   range: NSRange(location: insertionPoint, length: (text as NSString).length))
         // Re-apply input attributes on the tail (text storage merges around edits).
         if !pending.isEmpty {
             let newInputRange = NSRange(location: insertionPoint + (text as NSString).length,
@@ -183,6 +206,37 @@ final class ConsoleTextView: NSTextView {
         super.keyDown(with: event)
     }
 
+    // MARK: - Copy
+
+    /// Right-click menu: copy the selection, or everything when nothing is selected.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = NSMenu()
+        let selected = selectedRange()
+        let hasSelection = selected.length > 0
+        menu.addItem(withTitle: L10n.t("output.copy"),
+                     action: #selector(copy(_:)),
+                     keyEquivalent: "c").target = self
+        let copyAllItem = menu.addItem(withTitle: L10n.t("output.copyAll"),
+                                       action: #selector(copyAll(_:)),
+                                       keyEquivalent: "")
+        copyAllItem.target = self
+        menu.addItem(.separator())
+        menu.addItem(withTitle: L10n.t("output.selectAll"),
+                     action: #selector(selectAll(_:)),
+                     keyEquivalent: "a").target = self
+        // "Copy" is meaningless with no selection, but "Copy All" never is.
+        menu.item(at: 0)?.isEnabled = hasSelection
+        return menu
+    }
+
+    @objc func copyAll(_ sender: Any?) {
+        let all = string
+        guard !all.isEmpty else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(all, forType: .string)
+    }
+
     /// Sends whatever is typed in the console (used by the Return button too).
     func submitPendingInput() {
         let line = pendingInput
@@ -240,7 +294,8 @@ struct ConsoleView: NSViewRepresentable {
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = true
-        scrollView.backgroundColor = .textBackgroundColor
+        scrollView.backgroundColor = ConsoleTextView.terminalBackground
+        scrollView.appearance = NSAppearance(named: .darkAqua)
         scrollView.documentView = textView
 
         context.coordinator.textView = textView

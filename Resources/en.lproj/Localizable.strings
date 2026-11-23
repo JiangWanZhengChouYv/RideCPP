@@ -168,3 +168,7 @@
 "sidebar.includes" = "INCLUDES";
 "toolbar.sidebar" = "Outline";
 "status.jumped" = "Jumped to %1$@ (line %2$d)";
+"output.copyAll" = "Copy console text";
+"output.copied" = "Copied %d characters";
+"output.copy" = "Copy";
+"output.selectAll" = "Select All";

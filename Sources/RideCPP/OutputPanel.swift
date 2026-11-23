@@ -50,6 +50,16 @@ struct OutputPanel: View {
                 .lineLimit(1)
 
             Button {
+                copyConsoleText()
+            } label: {
+                Image(systemName: "doc.on.doc")
+                    .font(.system(size: 11))
+            }
+            .buttonStyle(.plain)
+            .help(L10n.t("output.copyAll"))
+            .disabled(copyableText().isEmpty)
+
+            Button {
                 state.clearOutput()
             } label: {
                 Image(systemName: "trash")
@@ -69,6 +79,34 @@ struct OutputPanel: View {
         }
         .padding(.horizontal, 10)
         .frame(height: 30)
+    }
+
+    /// Console text to copy: the current selection when there is one, otherwise
+    /// the whole transcript. Preferences are read from the live console so the
+    /// button always copies what is on screen.
+    private func copyableText() -> String {
+        switch state.outputSegment {
+        case .console:
+            if let console = ConsoleView.liveConsole {
+                let selected = console.selectedRange()
+                if selected.length > 0 {
+                    return (console.string as NSString).substring(with: selected)
+                }
+                return console.string
+            }
+            return state.outputText
+        case .problems:
+            return state.compilerLog
+        }
+    }
+
+    private func copyConsoleText() {
+        let text = copyableText()
+        guard !text.isEmpty else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+        state.statusText = L10n.t("output.copied", text.count)
     }
 
     @ViewBuilder

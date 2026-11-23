@@ -271,6 +271,42 @@ final class SelfTestRunner {
                "promptFirst=\(promptedBeforeInput) second=\(sawSecondPrompt) output=\(escaped(String(interactiveOutput.suffix(300))))")
         snapshot(named: "interactive-run")
 
+        // 7a. The console keeps a terminal palette: light text on a dark panel,
+        //     independent of the system appearance (light mode must not turn it
+        //     white-on-white).
+        if let console = ConsoleView.liveConsole {
+            let background = ConsoleTextView.terminalBackground.usingColorSpace(.sRGB)
+            let text = ConsoleTextView.terminalText.usingColorSpace(.sRGB)
+            let luminance = { (color: NSColor?) -> Double in
+                guard let color else { return -1 }
+                return 0.2126 * Double(color.redComponent)
+                    + 0.7152 * Double(color.greenComponent)
+                    + 0.0722 * Double(color.blueComponent)
+            }
+            let backgroundLuminance = luminance(background)
+            let textLuminance = luminance(text)
+            record("console-dark-palette",
+                   backgroundLuminance < 0.25 && textLuminance > 0.75,
+                   "bg=\(String(format: "%.2f", backgroundLuminance)) text=\(String(format: "%.2f", textLuminance))")
+
+                // Capture the console as it looks, for visual review of the palette.
+            console.displayIfNeeded()
+            if let rep = console.bitmapImageRepForCachingDisplay(in: console.bounds) {
+                console.cacheDisplay(in: console.bounds, to: rep)
+                if let data = rep.representation(using: .png, properties: [:]) {
+                    let directory = URL(fileURLWithPath: reportPath).deletingLastPathComponent()
+                    try? data.write(to: directory.appendingPathComponent("ridecpp-console-palette.png"))
+                }
+            }
+
+        // 7b. Copy all puts the transcript on the pasteboard.
+            console.copyAll(nil)
+            let copied = NSPasteboard.general.string(forType: .string) ?? ""
+            record("console-copy-all",
+                   !copied.isEmpty && copied.contains("Hello,"),
+                   "copied=\(copied.count) chars: \(escaped(String(copied.prefix(40))))")
+        }
+
         // 6b2. Waiting for typed input must not count as running time.
         view.string = """
         #include <iostream>

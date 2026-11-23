@@ -168,3 +168,7 @@
 "sidebar.includes" = "头文件";
 "toolbar.sidebar" = "大纲";
 "status.jumped" = "已跳转到 %1$@（第 %2$d 行）";
+"output.copyAll" = "复制终端内容";
+"output.copied" = "已复制 %d 个字符";
+"output.copy" = "复制";
+"output.selectAll" = "全选";
