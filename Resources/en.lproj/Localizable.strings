@@ -158,3 +158,13 @@
 
 "settings.autoComplete" = "Show completions while typing";
 "edit.complete" = "Complete";
+"sidebar.outline" = "OUTLINE";
+"sidebar.noSymbols" = "No symbols yet";
+"sidebar.functions" = "FUNCTIONS";
+"sidebar.structs" = "STRUCTS";
+"sidebar.classes" = "CLASSES";
+"sidebar.enums" = "ENUMS";
+"sidebar.variables" = "VARIABLES";
+"sidebar.includes" = "INCLUDES";
+"toolbar.sidebar" = "Outline";
+"status.jumped" = "Jumped to %1$@ (line %2$d)";

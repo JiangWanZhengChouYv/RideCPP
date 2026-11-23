@@ -31,6 +31,12 @@ final class EditorContainerView: NSView {
 
     override var isFlipped: Bool { true }
 
+    /// A zero-sized editor is never useful, and a restored window frame can
+    /// briefly produce one; this keeps the view out of that state.
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: 120)
+    }
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         // Layer-backing plus clipping confines the editor's drawing to this
@@ -45,6 +51,15 @@ final class EditorContainerView: NSView {
         super.init(coder: coder)
         wantsLayer = true
         layer?.masksToBounds = true
+    }
+
+    override func layout() {
+        super.layout()
+        // The editor scroll view is installed with constraints, but AppKit lays a
+        // programmatically added subview out lazily: forcing it here keeps the
+        // text view from being left at a stale (often zero) size.
+        installed?.frame = bounds
+        (installed as? NSScrollView)?.tile()
     }
 
     func install(_ view: NSView) {

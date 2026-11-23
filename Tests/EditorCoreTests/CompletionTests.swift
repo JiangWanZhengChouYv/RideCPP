@@ -451,3 +451,63 @@ final class UserSymbolStoreTests: XCTestCase {
         XCTAssertEqual(keyword.first { $0.insertionText == "while" }?.kind, .keyword)
     }
 }
+
+/// The outline sidebar: symbols and their line numbers.
+final class DocumentOutlineTests: XCTestCase {
+
+    private let document = """
+    #include <iostream>
+
+    struct Point { int x; };
+
+    class Solver {
+    public:
+        int solve(int n);
+    };
+
+    enum class Color { Red };
+
+    int globalCount = 0;
+
+    int computeSum(int a, int b) {
+        int total = a + b;
+        return total;
+    }
+    """
+
+    func testFindsEveryDeclarationKind() {
+        let items = DocumentOutline.items(in: document)
+        let kinds = Dictionary(uniqueKeysWithValues: items.map { ($0.name, $0.kind) })
+        XCTAssertEqual(kinds["Point"], .structure)
+        XCTAssertEqual(kinds["Solver"], .class)
+        XCTAssertEqual(kinds["Color"], .enumeration)
+        XCTAssertEqual(kinds["computeSum"], .function)
+        XCTAssertEqual(kinds["solve"], .function)
+        XCTAssertEqual(kinds["iostream"], .include)
+        XCTAssertEqual(kinds["globalCount"], .variable)
+    }
+
+    func testLineNumbersPointAtTheDeclaration() {
+        let items = DocumentOutline.items(in: document)
+        guard let function = items.first(where: { $0.name == "computeSum" }) else {
+            return XCTFail("computeSum missing")
+        }
+        let lines = document.split(separator: "\n", omittingEmptySubsequences: false)
+        XCTAssertTrue(lines[function.line - 1].contains("computeSum"),
+                      "line \(function.line) is \(lines[function.line - 1])")
+    }
+
+    func testLocalsInsideFunctionsAreNotOutlined() {
+        let items = DocumentOutline.items(in: document)
+        XCTAssertFalse(items.contains { $0.name == "total" },
+                       "a function-local variable should not appear in the outline")
+    }
+
+    func testParameterListIsCaptured() {
+        let items = DocumentOutline.items(in: document)
+        XCTAssertEqual(items.first { $0.name == "computeSum" }?.detail, "(int a, int b)")
+        // No parameters reads as a bare name rather than "()".
+        XCTAssertNil(items.first { $0.name == "solve" } != nil ? nil : "(nothing)")
+        XCTAssertEqual(items.first { $0.name == "solve" }?.detail, "(int n)")
+    }
+}

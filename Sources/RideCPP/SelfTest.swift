@@ -428,6 +428,12 @@ final class SelfTestRunner {
                        && containerWidth > 100,
                    "chars=\(opened.engine.textView.string.count) frame=\(frameDescription) containerWidth=\(containerDescription)")
             snapshot(named: "opened-file")
+        // The sidebar must not steal the editor's height.
+        let editorFrame = opened.engine.scrollView.frame
+        let editorWindow = opened.engine.scrollView.window?.frame ?? .zero
+        record("editor-keeps-height-with-sidebar",
+               editorFrame.height > 200 && editorFrame.width > 200,
+               "editor=\(Int(editorFrame.width))x\(Int(editorFrame.height)) window=\(Int(editorWindow.width))x\(Int(editorWindow.height))")
         }
 
         // 10. Opening a real file from disk.

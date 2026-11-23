@@ -57,10 +57,33 @@ final class CompletionPanel: NSPanel {
         // `orderFront` (not `orderFrontRegardless`) keeps the current key window,
         // so the editor keeps receiving the keystrokes that drive this list.
         orderFront(nil)
+        // A short fade-in reads as a popup rather than a flash of text. The panel
+        // is a plain window, so the animation is applied to its content view.
+        if let view = contentView {
+            view.wantsLayer = true
+            view.alphaValue = 0
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.08
+                view.animator().alphaValue = 1
+            }
+        }
     }
 
     func dismiss() {
-        orderOut(nil)
+        guard isVisible else {
+            items = []
+            return
+        }
+        if let view = contentView {
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.06
+                view.animator().alphaValue = 0
+            }, completionHandler: { [weak self] in
+                self?.orderOut(nil)
+            })
+        } else {
+            orderOut(nil)
+        }
         items = []
     }
 

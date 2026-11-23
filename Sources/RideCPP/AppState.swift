@@ -27,6 +27,10 @@ public final class AppState: ObservableObject {
     /// Mirrors the active document's undo stack, so the Edit menu's Undo/Redo
     /// items enable and disable as the user types (a plain computed property
     /// would never re-render the menu).
+    /// Name of the function/type the caret is inside, for the breadcrumb.
+    @Published public private(set) var selectedSymbolName: String?
+    /// "Ln 12, Col 5" indicator.
+    @Published public private(set) var caretPositionText = "Ln 1, Col 1"
     @Published public private(set) var canUndo = false
     @Published public private(set) var canRedo = false
     /// Statistics of the most recent program run, kept for the status bar/tests.
@@ -362,6 +366,18 @@ public final class AppState: ObservableObject {
     }
 
     /// Recomputes whether Undo/Redo are available for whatever is focused.
+    /// Updates the breadcrumb symbol and the Ln/Col readout.
+    public func updateCaretContext(line: Int, column: Int, text: String) {
+        caretPositionText = "Ln \(line), Col \(column)"
+        // Nearest preceding declaration is the enclosing symbol.
+        let outline = DocumentOutline.items(in: text)
+        let enclosing = outline.last { $0.line <= line && ($0.kind == .function || $0.kind == .structure
+                                                          || $0.kind == .class || $0.kind == .enumeration) }
+        if selectedSymbolName != enclosing?.name {
+            selectedSymbolName = enclosing?.name
+        }
+    }
+
     public func refreshUndoAvailability() {
         let manager = undoManagerForFocus() ?? selectedDocument?.undoManager
         let undo = manager?.canUndo ?? false

@@ -22,6 +22,8 @@ A lightweight native macOS C++ IDE: **SwiftUI** for the interface, **AppKit `NST
 | 代码补全 | 输入即弹出候选（`c` → `cin`、`cout`、`cerr`…），`↑`/`↓` 选择，`⏎` 接受，`Esc` 关闭，`⌃Space` 手动触发 |
 | 常用预测 | 候选按使用频率排序，常用名在首字母时就出现，不用把词打全 |
 | 符号记忆 | 你写过的函数、结构体、类、变量名会记住，换个文件依然能补全 |
+| 大纲侧边栏 | 左侧列出结构体、类、枚举、函数、全局变量和 include，点击跳转到定义行 |
+| 面包屑与光标 | 顶部显示文件路径和当前所在函数，右上角实时显示 `Ln 行, Col 列` |
 | 候选图标 | 每项前面一个方框角标：`kw` 关键字、`fx` 头文件/函数、`var` 变量 |
 | 运行统计 | 程序结束会显示退出码、运行用时（不含等待输入）与峰值内存（如 `退出码 0 · 用时 12 ms · 内存 3.4 MB`） |
 | 交互式运行 | 程序跑在伪终端里：提示语随打印即时出现，运行中可随时输入（也可先排队、运行时自动送入） |
@@ -45,6 +47,8 @@ A lightweight native macOS C++ IDE: **SwiftUI** for the interface, **AppKit `NST
 ![编辑器（深色）](Resources/Docs/editor-dark.png)
 
 ---
+
+![大纲侧边栏](Resources/Docs/ide-sidebar.png)
 
 ## 下载 / Download
 

@@ -1,33 +1,116 @@
 import SwiftUI
 import AppKit
 import BuildKit
+import EditorCore
 
 /// Main window contents: tabs on top, editor in the middle, output panel below.
 struct ContentView: View {
     @EnvironmentObject private var state: AppState
-    @State private var outputHeight: CGFloat = 200
+    @State private var outputHeight: CGFloat = 220
+    @State private var sidebarVisible = true
+    @State private var breadcrumbLine: Int?
 
     var body: some View {
         VStack(spacing: 0) {
             TabStrip()
             Divider()
-            editorArea
+            HStack(spacing: 0) {
+                if sidebarVisible, let document = state.selectedDocument {
+                    SidebarView(document: document, selectedLine: $breadcrumbLine)
+                        .frame(width: 220)
+                        .transition(.opacity)
+                    Divider()
+                }
+                editorColumn
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             if state.isOutputVisible && state.selectedDocument != nil {
                 Divider()
                 OutputPanel()
                     .frame(height: outputHeight)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
                 Divider()
             }
             if let update = state.availableUpdate {
                 updateBanner(update)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             statusBar
         }
         .frame(minWidth: 900, minHeight: 620)
         .toolbar { toolbarContent }
+        // Animations are applied to the *panels* rather than to this container.
+        // Attaching an implicit animation to the container that holds the
+        // NSViewRepresentable editor makes SwiftUI animate its AppKit view too,
+        // and the text view stops drawing (the window showed an empty editor).
         .onAppear {
             state.selectedDocument?.focusEditor()
         }
+    }
+
+    /// The editor plus the breadcrumb strip above it.
+    private var editorColumn: some View {
+        VStack(spacing: 0) {
+            if state.selectedDocument != nil {
+                breadcrumb
+                Divider()
+            }
+            // The editor must claim all remaining height explicitly: an
+            // NSViewRepresentable has no intrinsic size, and inside an HStack with
+            // the sidebar it otherwise collapsed to zero height.
+            editorArea
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Path + cursor position, the way an IDE shows where you are.
+    private var breadcrumb: some View {
+        HStack(spacing: 6) {
+            if let url = state.selectedDocument?.fileURL {
+                Text(url.deletingLastPathComponent().lastPathComponent)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                Image(systemName: "chevron.compact.right")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.quaternary)
+                Text(url.lastPathComponent)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+            } else {
+                Text(L10n.t("file.untitled"))
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            if let document = state.selectedDocument, let symbol = symbolName(for: document) {
+                Image(systemName: "chevron.compact.right")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.quaternary)
+                Image(systemName: "function")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+                Text(symbol)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if state.isBuilding || state.isRunning {
+                ProgressView()
+                    .controlSize(.mini)
+                    .scaleEffect(0.7)
+                    .frame(width: 12, height: 12)
+                    .transition(.opacity)
+            }
+            Text("Ln \(state.selectedDocument?.caretLine ?? 1), Col \(state.selectedDocument?.caretColumn ?? 1)")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 24)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .animation(.easeInOut(duration: 0.15), value: state.isBuilding)
+        .animation(.easeInOut(duration: 0.15), value: state.isRunning)
     }
 
     @ViewBuilder
@@ -110,8 +193,31 @@ struct ContentView: View {
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
+    /// The enclosing declaration at the caret, for the breadcrumb.
+    private func symbolName(for document: DocumentModel) -> String? {
+        let outline: [OutlineItem] = DocumentOutline.items(in: document.text)
+        let line = document.caretLine
+        let enclosing: OutlineItem? = outline.last { item in
+            guard item.line <= line else { return false }
+            switch item.kind {
+            case .function, .structure, .class, .enumeration: return true
+            case .variable, .include: return false
+            }
+        }
+        return enclosing?.name
+    }
+
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            Button {
+                sidebarVisible.toggle()
+            } label: {
+                Label(L10n.t("toolbar.sidebar"), systemImage: "sidebar.left")
+            }
+            .help(L10n.t("toolbar.sidebar"))
+        }
+
         ToolbarItemGroup(placement: .primaryAction) {
             Button {
                 state.build(andRun: false)

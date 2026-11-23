@@ -13,6 +13,11 @@ public final class DocumentModel: ObservableObject, Identifiable {
 
     @Published public private(set) var title: String
     @Published public private(set) var isDirty = false
+    /// Bumped on every edit, so views can react to text changes cheaply.
+    @Published public private(set) var editGeneration = 0
+    /// 1-based caret line, published so the breadcrumb and status bar can follow it.
+    @Published public private(set) var caretLine = 1
+    @Published public private(set) var caretColumn = 1
 
     /// The number behind an untitled tab's name ("Untitled 3" → 3), so new tabs
     /// can reuse numbers freed by closing instead of counting up forever.
@@ -41,11 +46,29 @@ public final class DocumentModel: ObservableObject, Identifiable {
         engine.load(text: text, undoManager: undoManager)
         engine.onEdit = { [weak self] in
             self?.updateDirtyState()
+            self?.editGeneration &+= 1
+        }
+        engine.onCaretChange = { [weak self] in
+            self?.updateCaretPosition()
         }
         compileURL = fileURL
     }
 
     public var text: String { engine.textView.string }
+
+    /// Recomputes the caret's line and column from the text view.
+    public func updateCaretPosition() {
+        let location = engine.textView.selectedRange().location
+        let ns = text as NSString
+        let clamped = min(max(0, location), ns.length)
+        let prefix = ns.substring(to: clamped)
+        let line = prefix.components(separatedBy: "\n").count
+        let columnStart = prefix.range(of: "\n", options: .backwards)
+            .map { (prefix as NSString).range(of: String(prefix[$0])).location + 1 } ?? 0
+        let column = clamped - columnStart + 1
+        if line != caretLine { caretLine = line }
+        if column != caretColumn { caretColumn = column }
+    }
 
     public func updateDirtyState() {
         let nowDirty = text != savedText
@@ -80,6 +103,11 @@ public final class DocumentModel: ObservableObject, Identifiable {
 
     public func focusEditor() {
         engine.focus()
+    }
+
+    /// Jumps to a 1-based line in this document.
+    public func jump(toLine line: Int) {
+        engine.jump(toLine: line)
     }
 
     /// Serialized text for saving/compiling. The editor always stores LF.

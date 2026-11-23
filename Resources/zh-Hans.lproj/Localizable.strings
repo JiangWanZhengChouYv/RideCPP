@@ -158,3 +158,13 @@
 
 "settings.autoComplete" = "输入时显示补全建议";
 "edit.complete" = "代码补全";
+"sidebar.outline" = "大纲";
+"sidebar.noSymbols" = "还没有符号";
+"sidebar.functions" = "函数";
+"sidebar.structs" = "结构体";
+"sidebar.classes" = "类";
+"sidebar.enums" = "枚举";
+"sidebar.variables" = "变量";
+"sidebar.includes" = "头文件";
+"toolbar.sidebar" = "大纲";
+"status.jumped" = "已跳转到 %1$@（第 %2$d 行）";

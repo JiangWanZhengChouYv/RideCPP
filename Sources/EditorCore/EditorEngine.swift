@@ -121,4 +121,29 @@ public final class EditorEngine {
     public func focus() {
         textView.window?.makeFirstResponder(textView)
     }
+
+    /// Moves the caret to the start of `line` (1-based) and scrolls it into view.
+    ///
+    /// Used by the outline sidebar: clicking a symbol should put the cursor on its
+    /// declaration, not merely scroll near it.
+    public func jump(toLine line: Int) {
+        let ns = textView.string as NSString
+        var currentLine = 1
+        var index = 0
+        while currentLine < line, index < ns.length {
+            let found = ns.range(of: "\n", options: [], range: NSRange(location: index, length: ns.length - index))
+            if found.location == NSNotFound { break }
+            index = found.location + 1
+            currentLine += 1
+        }
+        // Column 0 of the declaration's line, skipping its indentation so the caret
+        // lands on the first visible character.
+        var start = index
+        while start < ns.length, ns.character(at: start) == 0x20 || ns.character(at: start) == 0x09 {
+            start += 1
+        }
+        textView.setSelectedRange(NSRange(location: min(start, ns.length), length: 0))
+        textView.scrollRangeToVisible(NSRange(location: min(start, ns.length), length: 0))
+        focus()
+    }
 }
