@@ -14,7 +14,11 @@ struct RideCPPApp: App {
             ContentView()
                 .environmentObject(state)
                 .environmentObject(settings)
+                // A roomy default: the previous 900x532 opened cramped, with the
+                // editor shorter than the console needs.
+                .frame(minWidth: 1000, idealWidth: 1200, minHeight: 680, idealHeight: 820)
         }
+        .defaultSize(width: 1200, height: 820)
         .commands { AppCommands(state: state) }
 
         Settings {

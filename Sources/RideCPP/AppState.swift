@@ -85,6 +85,14 @@ public final class AppState: ObservableObject {
         // Look for a newer release in the background; failures are silent.
         checkForUpdates()
 
+        // Load the remembered symbol store, then keep learning from each document.
+        DispatchQueue.global(qos: .utility).async {
+            UserSymbolStore.shared.load()
+            DispatchQueue.main.async {
+                UserSymbolStore.shared.remember(declarationsIn: self.selectedDocument?.text ?? "")
+            }
+        }
+
         // Verify the keyword set in the background (one ~25 ms compiler run, then
         // cached on disk). Header vocabulary is indexed on demand per document,
         // never at launch.
@@ -180,6 +188,7 @@ public final class AppState: ObservableObject {
                 documents.append(document)
                 selectedDocumentID = document.id
                 rememberRecent(url)
+                UserSymbolStore.shared.remember(declarationsIn: text)
                 if usedFallback {
                     appendOutput("\n" + L10n.t("alert.encoding", url.lastPathComponent) + "\n", revealPanel: true)
                 }

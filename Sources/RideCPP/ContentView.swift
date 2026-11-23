@@ -23,7 +23,7 @@ struct ContentView: View {
             }
             statusBar
         }
-        .frame(minWidth: 720, minHeight: 480)
+        .frame(minWidth: 900, minHeight: 620)
         .toolbar { toolbarContent }
         .onAppear {
             state.selectedDocument?.focusEditor()

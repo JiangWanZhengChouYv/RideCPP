@@ -373,3 +373,81 @@ final class CompletionRankingTests: XCTestCase {
         }
     }
 }
+
+/// The remembered-symbol store: custom functions, structs, classes and variables
+/// must come back in later files and sessions.
+final class UserSymbolStoreTests: XCTestCase {
+
+    func testParsesDeclarationsButNotStandardNames() {
+        let document = """
+        #include <iostream>
+        struct Point { int x; int y; };
+        class Solver { public: int solve(int n); };
+        enum class Color { Red };
+        std::vector<int> numbers;
+        int computeSum(int a, int b) { return a + b; }
+        int main() { Point p; return 0; }
+        """
+        let names = UserSymbolStore.parseDeclarations(in: document).map(\.0)
+        XCTAssertTrue(names.contains("Point"))
+        XCTAssertTrue(names.contains("Solver"))
+        XCTAssertTrue(names.contains("solve"))
+        XCTAssertTrue(names.contains("Color"))
+        XCTAssertTrue(names.contains("computeSum"))
+        // Standard types and keywords are not user symbols.
+        XCTAssertFalse(names.contains("vector"))
+        XCTAssertFalse(names.contains("int"))
+        XCTAssertFalse(names.contains("main"))
+    }
+
+    func testRemembersAcrossDocumentsWithoutIncludes() {
+        let store = UserSymbolStore()
+        store.replaceAll([])
+        store.remember(declarationsIn: "struct TreeNode { int val; };\nint computeHash(int k) { return k; }\n")
+        XCTAssertEqual(store.count, 2)
+
+        // A brand-new file with no includes: only memory can help here.
+        let provider = BuiltinCompletionProvider(index: DocumentSymbolIndex(), symbols: store)
+        let suggestions = provider.completionItems(forPrefix: "tree", document: "int main() {}\n", context: .code)
+        XCTAssertEqual(suggestions.first?.insertionText, "TreeNode")
+        XCTAssertEqual(suggestions.first?.kind, .userDefined)
+    }
+
+    func testFrequentlyUsedNamesRankFirst() {
+        let store = UserSymbolStore()
+        store.replaceAll([
+            RememberedSymbol(name: "alphaName", kind: .userDefined, uses: 1, lastSeen: Date()),
+            RememberedSymbol(name: "alpinePeak", kind: .userDefined, uses: 9, lastSeen: Date())
+        ])
+        let names = store.symbols(withPrefix: "alp", limit: 5).map(\.name)
+        XCTAssertEqual(names.first, "alpinePeak")
+    }
+
+    func testStoreIsCapped() {
+        let store = UserSymbolStore()
+        let many = (0..<(UserSymbolStore.maximumSymbols + 50)).map {
+            RememberedSymbol(name: "sym\($0)", kind: .userDefined, uses: 1, lastSeen: Date())
+        }
+        store.replaceAll(many)
+        XCTAssertLessThanOrEqual(store.count, UserSymbolStore.maximumSymbols)
+    }
+
+    func testKindsDriveTheBadgeSource() {
+        let document = "#include <iostream>\nstruct Widget { };\n"
+        let index = DocumentSymbolIndex()
+        index.indexSynchronously(headers: ["iostream"])
+        let store = UserSymbolStore()
+        store.replaceAll([])
+        store.remember(declarationsIn: document)
+        let provider = BuiltinCompletionProvider(index: index, symbols: store)
+
+        let items = provider.completionItems(forPrefix: "w", document: document, context: .code)
+        XCTAssertEqual(items.first { $0.insertionText == "Widget" }?.kind, .userDefined)
+
+        let standard = provider.completionItems(forPrefix: "cou", document: document, context: .code)
+        XCTAssertEqual(standard.first { $0.insertionText == "cout" }?.kind, .header)
+
+        let keyword = provider.completionItems(forPrefix: "whil", document: document, context: .code)
+        XCTAssertEqual(keyword.first { $0.insertionText == "while" }?.kind, .keyword)
+    }
+}

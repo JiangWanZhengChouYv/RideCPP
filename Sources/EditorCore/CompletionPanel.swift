@@ -205,6 +205,52 @@ private final class CompletionTableView: NSView {
         }
     }
 
+    /// Draws the leading badge: a small outlined box with `kw`, `fx` or `var`
+    /// in its bottom-right corner, in front of the word.
+    private func drawBadge(for kind: SymbolKind, at x: CGFloat, rowRect: NSRect, selected: Bool) -> CGFloat {
+        let boxSide: CGFloat = 13
+        let box = NSRect(x: x, y: rowRect.midY - boxSide / 2 + 1, width: boxSide, height: boxSide)
+        let tint: NSColor = selected ? .white : NSColor.secondaryLabelColor
+        let path = NSBezierPath(roundedRect: box, xRadius: 3, yRadius: 3)
+        path.lineWidth = 1
+        tint.withAlphaComponent(selected ? 0.85 : 0.5).setStroke()
+        path.stroke()
+
+        // A glyph inside the box hints at the kind; the tiny label sits on the
+        // bottom-right corner so it reads as a tag rather than text.
+        let glyph: String
+        let label: String
+        switch kind {
+        case .keyword: glyph = "◇"; label = "kw"
+        case .header:  glyph = "ƒ"; label = "fx"
+        case .userDefined: glyph = "■"; label = "var"
+        }
+        let glyphAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 8, weight: .medium),
+            .foregroundColor: tint.withAlphaComponent(selected ? 0.9 : 0.65)
+        ]
+        let glyphSize = (glyph as NSString).size(withAttributes: glyphAttributes)
+        (glyph as NSString).draw(at: NSPoint(x: box.midX - glyphSize.width / 2,
+                                             y: box.midY - glyphSize.height / 2 + 1),
+                                 withAttributes: glyphAttributes)
+
+        // The corner label, drawn over the box's bottom-right edge.
+        let labelAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 6, weight: .semibold),
+            .foregroundColor: selected ? NSColor.white : NSColor.tertiaryLabelColor
+        ]
+        let labelSize = (label as NSString).size(withAttributes: labelAttributes)
+        let labelOrigin = NSPoint(x: box.maxX - labelSize.width + 1.5,
+                                  y: box.minY - labelSize.height + 1.5)
+        // Clear a small patch so the tag stays legible over the box outline.
+        let patch = NSRect(x: labelOrigin.x - 1, y: labelOrigin.y,
+                           width: labelSize.width + 2, height: labelSize.height)
+        (selected ? NSColor.selectedContentBackgroundColor : NSColor.windowBackgroundColor).setFill()
+        patch.fill()
+        (label as NSString).draw(at: labelOrigin, withAttributes: labelAttributes)
+        return box.maxX
+    }
+
     private func draw(item: CompletionItem, in rowRect: NSRect, selected: Bool) {
         guard let panel else { return }
         let font = panel.codeFont
@@ -214,6 +260,7 @@ private final class CompletionTableView: NSView {
             : NSColor.secondaryLabelColor.withAlphaComponent(0.65)
 
         var x = rowRect.minX + 10
+        x = drawBadge(for: item.kind, at: x, rowRect: rowRect, selected: selected) + 7
         let baselineY = rowRect.midY - font.capHeight / 2 - font.descender / 2
         for segment in item.displaySegments {
             let color = segment.isPlaceholder ? placeholderColor : codeColor

@@ -9,11 +9,17 @@ public struct CompletionItem: Equatable, Sendable, Identifiable {
     public let id: String
     public let text: String
     public let detail: String?
+    /// What this suggestion refers to; drives the leading badge (kw / fx / var).
+    public let kind: SymbolKind
 
-    public init(id: String = UUID().uuidString, text: String, detail: String? = nil) {
+    public init(id: String = UUID().uuidString,
+                text: String,
+                detail: String? = nil,
+                kind: SymbolKind = .keyword) {
         self.id = id
         self.text = text
         self.detail = detail
+        self.kind = kind
     }
 
     /// Text with placeholders and indent markers removed, which is what
@@ -160,9 +166,12 @@ public final class BuiltinCompletionProvider: CompletionProviding {
     public static let indentMarker: Character = "·"
 
     private let index: DocumentSymbolIndex
+    private let symbols: UserSymbolStore
 
-    public init(index: DocumentSymbolIndex = .shared) {
+    public init(index: DocumentSymbolIndex = .shared,
+                symbols: UserSymbolStore = .shared) {
         self.index = index
+        self.symbols = symbols
     }
 
     public func completionItems(forPrefix prefix: String,
@@ -184,19 +193,20 @@ public final class BuiltinCompletionProvider: CompletionProviding {
         var items: [CompletionItem] = []
         var seen = Set<String>()
 
-        func add(_ text: String, _ detail: String, id: String) {
+        func add(_ text: String, _ detail: String?, id: String, kind: SymbolKind) {
             // Deduplicate on what would actually be inserted.
             let insertion = Placeholder.strip(from: text)
             guard !insertion.isEmpty, !seen.contains(insertion) else { return }
             seen.insert(insertion)
-            items.append(CompletionItem(id: id, text: text, detail: detail))
+            items.append(CompletionItem(id: id, text: text, detail: detail, kind: kind))
         }
 
         // A snippet whose trigger matches exactly is the most likely intent.
         for snippet in Self.snippets where snippet.name.lowercased() == lowered {
             add(Self.expandingSnippet(snippet.body, standardNamespaceIsOpen: standardNamespaceIsOpen),
                 snippet.detail,
-                id: "snip:\(snippet.name)")
+                id: "snip:\(snippet.name)",
+                kind: .keyword)
         }
 
         // Everything else competes on usage rank rather than being concatenated:
@@ -205,8 +215,9 @@ public final class BuiltinCompletionProvider: CompletionProviding {
         var candidates: [RankedCandidate] = []
         for keyword in KeywordTable.keywords() where keyword.hasPrefix(lowered) {
             guard !Self.isNoise(keyword) else { continue }
-            candidates.append(RankedCandidate(name: keyword, detail: "keyword",
-                                              score: Self.usageScore(keyword, query: lowered, kind: .keyword)))
+            candidates.append(RankedCandidate(name: keyword, detail: nil,
+                                              score: Self.usageScore(keyword, query: lowered, kind: .keyword),
+                                              kind: .keyword))
         }
         // Only the headers this file includes contribute vocabulary, so cost stays
         // proportional to what is actually used (one header, or one
@@ -215,15 +226,30 @@ public final class BuiltinCompletionProvider: CompletionProviding {
         for name in index.names(from: headers, prefix: query, limit: 40) {
             // Namespace and macro scaffolding is never what the user is typing.
             guard !Self.isNoise(name) else { continue }
-            candidates.append(RankedCandidate(name: name, detail: "header",
-                                              score: Self.usageScore(name, query: lowered, kind: .header)))
+            candidates.append(RankedCandidate(name: name, detail: nil,
+                                              score: Self.usageScore(name, query: lowered, kind: .header),
+                                              kind: .header))
+        }
+        // Names remembered from earlier files and sessions: the "custom function,
+        // struct, class, variable" memory.
+        for remembered in symbols.symbols(withPrefix: query, limit: 20)
+        where !Self.isNoise(remembered.name) {
+            var score = Self.usageScore(remembered.name, query: lowered, kind: .userDefined)
+            // Frequently written names deserve to lead the list.
+            score += min(Double(remembered.uses), 20) * 2
+            if symbols.isSessionName(remembered.name) { score += 10 }
+            candidates.append(RankedCandidate(name: remembered.name,
+                                              detail: "remembered",
+                                              score: score,
+                                              kind: .userDefined))
         }
         for symbol in Self.localIdentifiers(in: document) where symbol.lowercased().hasPrefix(lowered) {
             // `using namespace std;` makes `std` look like a local identifier; it
             // is still never a thing to type.
             guard !Self.isNoise(symbol) else { continue }
-            candidates.append(RankedCandidate(name: symbol, detail: "in this file",
-                                              score: Self.usageScore(symbol, query: lowered, kind: .local)))
+            candidates.append(RankedCandidate(name: symbol, detail: nil,
+                                              score: Self.usageScore(symbol, query: lowered, kind: .userDefined),
+                                              kind: .userDefined))
         }
 
         candidates.sort { lhs, rhs in
@@ -231,13 +257,15 @@ public final class BuiltinCompletionProvider: CompletionProviding {
             return lhs.name < rhs.name
         }
         for candidate in candidates {
-            add(candidate.name, candidate.detail, id: "rank:\(candidate.name)")
+            add(candidate.name, candidate.detail, id: "rank:\(candidate.name)",
+                kind: candidate.kind)
         }
 
         for snippet in Self.snippets where snippet.name.lowercased().hasPrefix(lowered) && snippet.name.lowercased() != lowered {
             add(Self.expandingSnippet(snippet.body, standardNamespaceIsOpen: standardNamespaceIsOpen),
                 snippet.detail,
-                id: "snip:\(snippet.name)")
+                id: "snip:\(snippet.name)",
+                kind: .keyword)
         }
         return Array(items.prefix(40))
     }
@@ -254,14 +282,15 @@ public final class BuiltinCompletionProvider: CompletionProviding {
     /// A completion candidate with its usefulness score.
     struct RankedCandidate {
         let name: String
-        let detail: String
+        let detail: String?
         let score: Double
+        let kind: SymbolKind
     }
 
     enum CandidateKind {
         case keyword
         case header
-        case local
+        case userDefined
     }
 
     /// Names that are worth surfacing from the first keystroke, in rough order of
@@ -316,7 +345,7 @@ public final class BuiltinCompletionProvider: CompletionProviding {
         switch kind {
         // Names already used in this file are what the user is most likely to
         // retype, so they must beat keywords even when the keyword is "common".
-        case .local: score += 160
+        case .userDefined: score += 160
         case .header: score += 30
         case .keyword: score += 12
         }
