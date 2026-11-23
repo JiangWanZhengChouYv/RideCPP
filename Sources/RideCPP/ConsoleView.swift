@@ -16,6 +16,14 @@ final class ConsoleTextView: NSTextView {
     /// not reject its own changes.
     private var isApplyingInternalEdit = false
 
+    /// Keeps colours correct when the user switches light/dark while the console
+    /// is on screen.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyPalette()
+        needsDisplay = true
+    }
+
     var onSubmit: ((String) -> Void)?
     var onInterrupt: (() -> Void)?
     /// Reports the text currently being typed (the editable tail).
@@ -45,15 +53,11 @@ final class ConsoleTextView: NSTextView {
         isSelectable = true
         allowsUndo = false
         drawsBackground = true
-        // A terminal look that does not follow the system theme: output is always
-        // light text on a dark panel, which is what people expect from a console
-        // and what keeps program output legible in light mode too.
-        backgroundColor = Self.terminalBackground
-        textColor = Self.terminalText
-        insertionPointColor = Self.terminalCaret
-        // Force the dark appearance so NSTextView's own drawing (selection,
-        // scroller, spell-check underline) matches the fixed colours.
-        appearance = NSAppearance(named: .darkAqua)
+        // The console follows the system appearance, like the rest of the window:
+        // dark text on a light panel in light mode, light text on a dark panel in
+        // dark mode. The colours are dynamic (see `Palette`), so no appearance is
+        // forced here.
+        applyPalette()
         font = Self.outputFont
         textContainerInset = NSSize(width: 8, height: 6)
         textContainer?.lineFragmentPadding = 2
@@ -63,31 +67,109 @@ final class ConsoleTextView: NSTextView {
         textContainer?.widthTracksTextView = true
         textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
         typingAttributes = Self.inputAttributes
-        selectedTextAttributes = [.backgroundColor: Self.terminalSelection]
+        selectedTextAttributes = [.backgroundColor: Palette.selection]
     }
 
     static var outputFont: NSFont { .monospacedSystemFont(ofSize: 11, weight: .regular) }
 
-    // MARK: - Terminal palette
+    // MARK: - Palette
 
-    /// Background of the console: near-black, slightly blue, like a terminal.
-    static let terminalBackground = NSColor(srgbRed: 0.07, green: 0.08, blue: 0.10, alpha: 1)
-    /// Program output: a soft white, not pure #FFF, to reduce glare.
-    static let terminalText = NSColor(srgbRed: 0.90, green: 0.92, blue: 0.95, alpha: 1)
-    /// What the user types: a warm accent that stands out against the output.
-    static let terminalInputText = NSColor(srgbRed: 0.55, green: 0.85, blue: 0.95, alpha: 1)
-    /// Placeholder hint drawn over the empty console.
-    static let terminalHintText = NSColor(srgbRed: 0.55, green: 0.58, blue: 0.63, alpha: 1)
-    /// Selection and caret.
-    static let terminalCaret = NSColor(srgbRed: 0.55, green: 0.85, blue: 0.95, alpha: 1)
-    static let terminalSelection = NSColor(srgbRed: 0.20, green: 0.35, blue: 0.50, alpha: 1)
+    /// Appearance-adaptive console colours.
+    ///
+    /// Each colour is built from a provider, so AppKit re-resolves it when the
+    /// system switches between light and dark: no view rebuild is required, and
+    /// text stays legible in both modes.
+    enum Palette {
+        /// Panel behind the console text.
+        static let background = NSColor(name: "console.background") { appearance in
+            appearance.isDark
+                ? NSColor(srgbRed: 0.07, green: 0.08, blue: 0.10, alpha: 1)
+                : NSColor(srgbRed: 0.98, green: 0.98, blue: 0.99, alpha: 1)
+        }
+
+        /// Program output.
+        static let text = NSColor(name: "console.text") { appearance in
+            appearance.isDark
+                ? NSColor(srgbRed: 0.90, green: 0.92, blue: 0.95, alpha: 1)
+                : NSColor(srgbRed: 0.10, green: 0.11, blue: 0.13, alpha: 1)
+        }
+
+        /// What the user types.
+        static let input = NSColor(name: "console.input") { appearance in
+            appearance.isDark
+                ? NSColor(srgbRed: 0.55, green: 0.85, blue: 0.95, alpha: 1)
+                : NSColor(srgbRed: 0.05, green: 0.38, blue: 0.55, alpha: 1)
+        }
+
+        /// Hint text over an empty console.
+        static let hint = NSColor(name: "console.hint") { appearance in
+            appearance.isDark
+                ? NSColor(srgbRed: 0.62, green: 0.65, blue: 0.70, alpha: 1)
+                : NSColor(srgbRed: 0.35, green: 0.37, blue: 0.41, alpha: 1)
+        }
+
+        static let caret = input
+
+        static let selection = NSColor(name: "console.selection") { appearance in
+            appearance.isDark
+                ? NSColor(srgbRed: 0.20, green: 0.35, blue: 0.50, alpha: 1)
+                : NSColor(srgbRed: 0.72, green: 0.85, blue: 0.95, alpha: 1)
+        }
+
+        static func outputAttributes(font: NSFont) -> [NSAttributedString.Key: Any] {
+            [.font: font, .foregroundColor: text]
+        }
+
+        static func inputAttributes(font: NSFont) -> [NSAttributedString.Key: Any] {
+            [.font: font, .foregroundColor: input]
+        }
+    }
+
+    /// Applies the adaptive palette to this view and to its current text.
+    func applyPalette() {
+        backgroundColor = Palette.background
+        textColor = Palette.text
+        insertionPointColor = Palette.caret
+        selectedTextAttributes = [.backgroundColor: Palette.selection]
+        typingAttributes = Self.inputAttributes
+        // Re-colour what is already displayed: attributed text keeps the colours it
+        // was written with, so switching appearance would otherwise leave the old
+        // palette behind until the next append.
+        guard let storage = textStorage, storage.length > 0 else { return }
+        isApplyingInternalEdit = true
+        storage.beginEditing()
+        let transcript = NSRange(location: 0, length: min(transcriptLength, storage.length))
+        if transcript.length > 0 {
+            storage.setAttributes(Self.outputAttributes, range: transcript)
+        }
+        if storage.length > transcript.length {
+            storage.setAttributes(Self.inputAttributes,
+                                  range: NSRange(location: transcript.length,
+                                                 length: storage.length - transcript.length))
+        }
+        storage.endEditing()
+        isApplyingInternalEdit = false
+    }
 
     static var outputAttributes: [NSAttributedString.Key: Any] {
-        [.font: outputFont, .foregroundColor: terminalText]
+        Palette.outputAttributes(font: outputFont)
     }
 
     static var inputAttributes: [NSAttributedString.Key: Any] {
-        [.font: outputFont, .foregroundColor: terminalInputText]
+        Palette.inputAttributes(font: outputFont)
+    }
+
+    /// The hint colour, resolved for the current appearance.
+    static var terminalHintText: NSColor { Palette.hint }
+
+    /// Console background, resolved for `appearance` (defaults to the current one).
+    static func terminalBackground(for appearance: NSAppearance? = nil) -> NSColor {
+        appearance.map { Palette.background.resolved(for: $0) } ?? Palette.background
+    }
+
+    /// Console output colour, resolved for `appearance`.
+    static func terminalText(for appearance: NSAppearance? = nil) -> NSColor {
+        appearance.map { Palette.text.resolved(for: $0) } ?? Palette.text
     }
 
     // MARK: - Transcript
@@ -308,8 +390,7 @@ struct ConsoleView: NSViewRepresentable {
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = true
-        scrollView.backgroundColor = ConsoleTextView.terminalBackground
-        scrollView.appearance = NSAppearance(named: .darkAqua)
+        scrollView.backgroundColor = ConsoleTextView.Palette.background
         scrollView.documentView = textView
 
         context.coordinator.textView = textView
@@ -355,5 +436,24 @@ extension ConsoleTextView {
         let ns = string as NSString
         guard transcriptLength <= ns.length else { return string }
         return ns.substring(to: transcriptLength)
+    }
+}
+
+extension NSAppearance {
+    /// True when this appearance is a dark variant.
+    var isDark: Bool {
+        bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+    }
+}
+
+extension NSColor {
+    /// This colour resolved against a specific appearance, for tests and for
+    /// manual colour computation.
+    func resolved(for appearance: NSAppearance) -> NSColor {
+        var result = self
+        appearance.performAsCurrentDrawingAppearance {
+            result = self.usingColorSpace(.sRGB) ?? self
+        }
+        return result
     }
 }

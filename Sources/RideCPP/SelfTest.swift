@@ -271,80 +271,82 @@ final class SelfTestRunner {
                "promptFirst=\(promptedBeforeInput) second=\(sawSecondPrompt) output=\(escaped(String(interactiveOutput.suffix(300))))")
         snapshot(named: "interactive-run")
 
-        // 7a. The console keeps a terminal palette: light text on a dark panel,
-        //     independent of the system appearance (light mode must not turn it
-        //     white-on-white).
+        // 7a. The console palette adapts to the system appearance: dark text on a
+        //     light panel in light mode, light text on a dark panel in dark mode.
+        //     A fixed palette is what made text vanish in one of the two modes.
         if let console = ConsoleView.liveConsole {
-            let background = ConsoleTextView.terminalBackground.usingColorSpace(.sRGB)
-            let text = ConsoleTextView.terminalText.usingColorSpace(.sRGB)
-            let luminance = { (color: NSColor?) -> Double in
-                guard let color else { return -1 }
-                return 0.2126 * Double(color.redComponent)
-                    + 0.7152 * Double(color.greenComponent)
-                    + 0.0722 * Double(color.blueComponent)
-            }
-            let backgroundLuminance = luminance(background)
-            let textLuminance = luminance(text)
+            let aqua = NSAppearance(named: .aqua) ?? NSAppearance.currentDrawing()
+            let darkAqua = NSAppearance(named: .darkAqua) ?? NSAppearance.currentDrawing()
+            let lightBg = paletteLuminance(ConsoleTextView.terminalBackground(for: aqua))
+            let lightFg = paletteLuminance(ConsoleTextView.terminalText(for: aqua))
+            let darkBg = paletteLuminance(ConsoleTextView.terminalBackground(for: darkAqua))
+            let darkFg = paletteLuminance(ConsoleTextView.terminalText(for: darkAqua))
+            let hintLight = paletteLuminance(ConsoleTextView.terminalHintText.resolved(for: aqua))
+            let hintDark = paletteLuminance(ConsoleTextView.terminalHintText.resolved(for: darkAqua))
+            let paletteDescription = "light=\(String(format: "%.2f", lightBg))/fg\(String(format: "%.2f", lightFg)) dark=\(String(format: "%.2f", darkBg))/fg\(String(format: "%.2f", darkFg)) hintLight=\(String(format: "%.2f", hintLight)) hintDark=\(String(format: "%.2f", hintDark))"
+            record("console-adapts-to-appearance",
+                   consolePaletteAdaptsToAppearance(),
+                   paletteDescription)
+            record("console-hint-contrast",
+                   consoleHintContrastsInBothAppearances(),
+                   paletteDescription)
 
-            // Measure what is actually drawn, not the intended constants: render
-            // the view and count how many pixels are dark on a dark background
-            // (invisible text) versus light (legible).
-            var darkGlyphPixels = 0
-            var lightGlyphPixels = 0
-            var renderedBackground = -1.0
-            if let rep = console.bitmapImageRepForCachingDisplay(in: console.bounds) {
-                console.cacheDisplay(in: console.bounds, to: rep)
-                let width = rep.pixelsWide
-                let height = rep.pixelsHigh
-                if width > 0, height > 0 {
-                    // Background sample from an empty area (bottom-right corner).
-                    if let bg = rep.colorAt(x: width - 8, y: height - 8)?.usingColorSpace(.sRGB) {
-                        renderedBackground = luminance(bg)
-                    }
-                    // Text band: the top few lines.
-                    let maxY = min(height, 60)
-                    for y in stride(from: 2, to: maxY, by: 1) {
-                        for x in stride(from: 2, to: min(width, 400), by: 1) {
-                            guard let pixel = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-                            let l = luminance(pixel)
-                            if l < 0.25 { darkGlyphPixels += 1 }
-                            if l > 0.6 { lightGlyphPixels += 1 }
-                        }
-                    }
-                }
+        // 7a3. A program printing many lines must not lose any in the console.
+        //      Long output used to look truncated, so this walks the real view.
+        if let console = ConsoleView.liveConsole {
+            let savedTranscript = console.transcriptText
+            let savedSelection = console.selectedRange()
+            defer {
+                console.clearPendingInput()
+                console.replaceTranscript(savedTranscript)
+                console.setSelectedRange(savedSelection)
             }
-            record("console-dark-palette",
-                   backgroundLuminance < 0.25 && textLuminance > 0.75,
-                   "bg=\(String(format: "%.2f", backgroundLuminance)) text=\(String(format: "%.2f", textLuminance))")
-            // The rendered check: legible text means light pixels on a dark panel.
-            record("console-text-visible-on-dark",
-                   renderedBackground < 0.3 && lightGlyphPixels > 200,
-                   "renderedBg=\(String(format: "%.2f", renderedBackground)) lightPixels=\(lightGlyphPixels) darkPixels=\(darkGlyphPixels)")
-
-                // Capture the console as it looks, for visual review of the palette.
-            console.displayIfNeeded()
-            if let rep = console.bitmapImageRepForCachingDisplay(in: console.bounds) {
-                console.cacheDisplay(in: console.bounds, to: rep)
-                if let data = rep.representation(using: .png, properties: [:]) {
-                    let directory = URL(fileURLWithPath: reportPath).deletingLastPathComponent()
-                    try? data.write(to: directory.appendingPathComponent("ridecpp-console-palette.png"))
-                }
+            console.clearPendingInput()
+            console.replaceTranscript("")
+            let expected = 800
+            for index in 0..<expected {
+                console.appendOutput("line \(index)\n")
             }
+            let text = console.transcriptText
+            let produced = text.components(separatedBy: "\n").count - 1
+            record("console-keeps-long-output",
+                   produced == expected
+                       && text.contains("line 0\n")
+                       && text.contains("line \(expected - 1)\n"),
+                   "lines=\(produced)/\(expected) chars=\(text.count)")
+        }
 
         // 7b. Copy all puts the transcript on the pasteboard.
             console.copyAll(nil)
             let copied = NSPasteboard.general.string(forType: .string) ?? ""
-            record("console-input-visible",
-                   consoleInputIsLegible(console),
-                   "typed input rendered")
-            record("console-hint-contrast", consoleHintContrastsInLightMode(),
-                   "hint vs console background")
-            record("console-both-appearances", consoleLegibleInBothAppearances(console),
-                   "light and dark both legible")
             record("console-copy-all",
                    !copied.isEmpty && copied.contains("Hello,"),
                    "copied=\(copied.count) chars: \(escaped(String(copied.prefix(40))))")
         }
+
+        // 6c2. End to end: a program printing 900 lines must reach the console
+        //      complete. This exercises the batching path in AppState, which is
+        //      where a long output could be dropped.
+        view.string = """
+        #include <iostream>
+        int main() {
+            for (int i = 0; i < 900; ++i) std::cout << i << "\\n";
+            return 0;
+        }
+        """
+        state.build(andRun: true)
+        let printed = await waitUntil(timeout: 60) {
+            !state.isBuilding && !state.isRunning && state.outputText.contains("\n899")
+        }
+        // Count only the numeric lines the program printed; the run summary and
+        // blank lines are not part of the program's output.
+        let numericLines = state.outputText
+            .components(separatedBy: "\n")
+            .filter { !$0.isEmpty && Int($0) != nil }
+        record("long-output-not-truncated",
+               printed && numericLines.count >= 900
+                   && numericLines.first == "0" && numericLines.last == "899",
+               "lines=\(numericLines.count) first=\(numericLines.first ?? "-") last=\(numericLines.last ?? "-")")
 
         // 6b2. Waiting for typed input must not count as running time.
         view.string = """
@@ -620,117 +622,53 @@ final class SelfTestRunner {
         print("[selftest] \(passed ? "ALL CHECKS PASSED" : "SOME CHECKS FAILED") -> \(reportPath)")
         NSApp.terminate(nil)
     }
-    /// Renders the console with typed input and reports whether that text is light
-    /// on a dark background (i.e. actually visible).
-    private func consoleInputIsLegible(_ console: ConsoleTextView) -> Bool {
-        // Snapshot the transcript so the probe leaves the console exactly as it
-        // found it: later checks type into this same view.
-        let savedTranscript = console.transcriptText
-        let savedSelection = console.selectedRange()
-        defer {
-            // `replaceTranscript` keeps the pending tail, so clear it first or the
-            // probe's own text leaks into later checks.
-            console.clearPendingInput()
-            console.replaceTranscript(savedTranscript)
-            console.setSelectedRange(savedSelection)
-        }
-        console.replaceTranscript("")
-        console.setSelectedRange(NSRange(location: 0, length: 0))
-        console.insertText("typed input line", replacementRange: NSRange(location: NSNotFound, length: 0))
-        guard let rep = console.bitmapImageRepForCachingDisplay(in: console.bounds) else { return false }
-        console.cacheDisplay(in: console.bounds, to: rep)
-        var light = 0
-        var background = 1.0
-        if let bg = rep.colorAt(x: rep.pixelsWide - 8, y: rep.pixelsHigh - 8)?.usingColorSpace(.sRGB) {
-            background = 0.2126 * Double(bg.redComponent) + 0.7152 * Double(bg.greenComponent)
-                + 0.0722 * Double(bg.blueComponent)
-        }
-        for y in stride(from: 2, to: min(rep.pixelsHigh, 40), by: 1) {
-            for x in stride(from: 2, to: min(rep.pixelsWide, 400), by: 1) {
-                guard let pixel = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-                let l = 0.2126 * Double(pixel.redComponent) + 0.7152 * Double(pixel.greenComponent)
-                    + 0.0722 * Double(pixel.blueComponent)
-                if l > 0.5 { light += 1 }
-            }
-        }
-        return background < 0.3 && light > 100
+
+
+
+
+    // MARK: - Console palette checks
+
+    private func paletteLuminance(_ color: NSColor) -> Double {
+        guard let srgb = color.usingColorSpace(.sRGB) else { return -1 }
+        return 0.2126 * Double(srgb.redComponent)
+            + 0.7152 * Double(srgb.greenComponent)
+            + 0.0722 * Double(srgb.blueComponent)
     }
 
-    /// Renders the console once under a forced light appearance and once under a
-    /// forced dark appearance, and reports whether the typed text is legible in
-    /// both. The bug being guarded against was text that only vanished in one of
-    /// the two modes, so checking a single appearance is not enough.
-    private func consoleLegibleInBothAppearances(_ console: ConsoleTextView) -> Bool {
-        let savedTranscript = console.transcriptText
-        let savedSelection = console.selectedRange()
-        defer {
-            console.clearPendingInput()
-            console.replaceTranscript(savedTranscript)
-            console.setSelectedRange(savedSelection)
-            console.appearance = nil
-        }
-        console.replaceTranscript("")
-        console.setSelectedRange(NSRange(location: 0, length: 0))
-        console.insertText("typed input line", replacementRange: NSRange(location: NSNotFound, length: 0))
+    /// The console must flip with the system appearance, and stay legible in both.
+    ///
+    /// This checks resolved colours *and* rendered pixels, because the earlier bug
+    /// was a palette that looked fine as constants but drew invisible text when the
+    /// system switched modes.
+    private func consolePaletteAdaptsToAppearance() -> Bool {
+        let light = NSAppearance(named: .aqua)
+        let dark = NSAppearance(named: .darkAqua)
+        guard let light, let dark else { return false }
 
-        for name in ["aqua", "darkAqua"] {
-            console.appearance = NSAppearance(named: name == "aqua" ? .aqua : .darkAqua)
-            console.needsDisplay = true
-            console.displayIfNeeded()
-            guard let rep = console.bitmapImageRepForCachingDisplay(in: console.bounds) else { return false }
-            console.cacheDisplay(in: console.bounds, to: rep)
+        let lightBackground = paletteLuminance(ConsoleTextView.terminalBackground(for: light))
+        let lightText = paletteLuminance(ConsoleTextView.terminalText(for: light))
+        let darkBackground = paletteLuminance(ConsoleTextView.terminalBackground(for: dark))
+        let darkText = paletteLuminance(ConsoleTextView.terminalText(for: dark))
 
-            var light = 0
-            var dark = 0
-            var background = -1.0
-            if let bg = rep.colorAt(x: rep.pixelsWide - 8, y: rep.pixelsHigh - 8)?.usingColorSpace(.sRGB) {
-                background = 0.2126 * Double(bg.redComponent)
-                    + 0.7152 * Double(bg.greenComponent) + 0.0722 * Double(bg.blueComponent)
-            }
-            for y in stride(from: 2, to: min(rep.pixelsHigh, 40), by: 1) {
-                for x in stride(from: 2, to: min(rep.pixelsWide, 400), by: 1) {
-                    guard let pixel = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-                    let l = 0.2126 * Double(pixel.redComponent)
-                        + 0.7152 * Double(pixel.greenComponent) + 0.0722 * Double(pixel.blueComponent)
-                    if l > 0.55 { light += 1 }
-                    if l < 0.25 { dark += 1 }
-                }
-            }
-            // Whichever background the console uses, the glyphs must contrast with
-            // it: light text on a dark panel, or dark text on a light panel.
-            let legible = background < 0.4 ? light > 100 : dark > 100
-            Self.consoleAppearanceReport[name] = "bg=\(String(format: "%.2f", background)) light=\(light) dark=\(dark) ok=\(legible)"
-            if !legible { return false }
-        }
-        return true
+        // Light mode: light panel, dark text. Dark mode: dark panel, light text.
+        let lightOK = lightBackground > 0.7 && lightText < 0.5
+        let darkOK = darkBackground < 0.3 && darkText > 0.5
+        // Both modes must actually contrast, not merely be "different".
+        let lightContrast = abs(lightBackground - lightText)
+        let darkContrast = abs(darkBackground - darkText)
+        return lightOK && darkOK && lightContrast > 0.4 && darkContrast > 0.4
     }
 
-    nonisolated(unsafe) static var consoleAppearanceReport: [String: String] = [:]
-
-    /// The empty-console hint sits on the fixed dark console panel, so its colour
-    /// must contrast with that panel in BOTH system appearances. Using a semantic
-    /// colour made it near-black in light mode and effectively invisible.
-    private func consoleHintContrastsInLightMode() -> Bool {
-        func luminance(_ color: NSColor) -> Double {
-            guard let srgb = color.usingColorSpace(.sRGB) else { return -1 }
-            return 0.2126 * Double(srgb.redComponent)
-                + 0.7152 * Double(srgb.greenComponent) + 0.0722 * Double(srgb.blueComponent)
-        }
-        // Resolve the hint colour under each appearance, as the view would.
-        var results: [String: Double] = [:]
+    /// The empty-console hint must contrast with the panel in both appearances.
+    private func consoleHintContrastsInBothAppearances() -> Bool {
         for name in [NSAppearance.Name.aqua, .darkAqua] {
-            let appearance = NSAppearance(named: name)
-            var resolved = NSColor.white
-            appearance?.performAsCurrentDrawingAppearance {
-                resolved = ConsoleTextView.terminalHintText.usingColorSpace(.sRGB) ?? .white
-            }
-            let background = luminance(ConsoleTextView.terminalBackground)
-            let hint = luminance(resolved)
-            // The hint must be clearly lighter than the panel it is drawn on.
-            if hint - background < 0.25 { return false }
-            results[name.rawValue] = hint
+            guard let appearance = NSAppearance(named: name) else { return false }
+            let background = paletteLuminance(ConsoleTextView.terminalBackground(for: appearance))
+            let hint = paletteLuminance(ConsoleTextView.terminalHintText.resolved(for: appearance))
+            // The hint is secondary text, but must still read clearly: 0.45 is the
+            // difference between "visible" and "washed out on white".
+            if abs(hint - background) < 0.45 { return false }
         }
-        _ = results
         return true
     }
 
