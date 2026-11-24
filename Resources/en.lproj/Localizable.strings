@@ -152,7 +152,6 @@
 "update.upToDate.message" = "You are running version %@.";
 "update.failed.title" = "Could Not Check for Updates";
 "update.available.title" = "A new version is available";
-"update.download" = "Download";
 
 "update.available.message" = "RideCPP %@ is available.";
 

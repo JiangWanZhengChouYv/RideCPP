@@ -228,10 +228,9 @@ struct ContentView: View {
     private func bannerAction(_ update: ReleaseInfo) -> some View {
         switch state.updatePhase {
         case .idle:
+            // One action: the update installs itself. Opening the release page was a
+            // second, redundant path.
             Button(L10n.t("update.install")) { state.installAvailableUpdate() }
-                .buttonStyle(.link)
-                .font(.system(size: 11))
-            Button(L10n.t("update.download")) { state.openAvailableUpdate() }
                 .buttonStyle(.link)
                 .font(.system(size: 11))
         case .downloading, .installing, .readyToRelaunch:

@@ -195,8 +195,14 @@ final class SelfTestRunner {
             return 0;
         }
         """
+        // Clear first so a stale transcript cannot satisfy the check, and wait for
+        // the program's own text: `isRunning` flips before the last output chunk is
+        // appended, which made this check flaky.
+        state.outputText = ""
         state.build(andRun: true)
-        let ranOK = await waitUntil(timeout: 60) { !state.isBuilding && !state.isRunning }
+        let ranOK = await waitUntil(timeout: 60) {
+            !state.isBuilding && !state.isRunning && state.outputText.contains("selftest-ok")
+        }
         let onDisk = document.fileURL.flatMap { try? String(contentsOf: $0, encoding: .utf8) }
         record("build-saves-before-compiling",
                document.fileURL != nil && onDisk == view.string,
