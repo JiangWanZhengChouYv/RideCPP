@@ -172,3 +172,4 @@
 "output.copied" = "已复制 %d 个字符";
 "output.copy" = "复制";
 "output.selectAll" = "全选";
+"console.tooLong" = "—— 输出过长（共 %d 行），请复制后查看完整内容。以下是最后 %d 行 ——";

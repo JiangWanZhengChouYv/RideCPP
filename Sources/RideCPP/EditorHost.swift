@@ -34,7 +34,7 @@ final class EditorContainerView: NSView {
     /// A zero-sized editor is never useful, and a restored window frame can
     /// briefly produce one; this keeps the view out of that state.
     override var intrinsicContentSize: NSSize {
-        NSSize(width: NSView.noIntrinsicMetric, height: 120)
+        NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
     }
 
     override init(frame frameRect: NSRect) {

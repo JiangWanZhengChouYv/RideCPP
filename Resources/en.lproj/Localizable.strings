@@ -172,3 +172,4 @@
 "output.copied" = "Copied %d characters";
 "output.copy" = "Copy";
 "output.selectAll" = "Select All";
+"console.tooLong" = "—— Output is long (%d lines); copy it to see everything. Showing the last %d lines. ——";

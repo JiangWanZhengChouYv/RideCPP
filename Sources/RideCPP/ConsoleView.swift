@@ -12,6 +12,12 @@ final class ConsoleTextView: NSTextView {
 
     /// Length (UTF-16) of the locked transcript at the start of the view.
     private(set) var transcriptLength = 0
+    /// The complete output, even when only its tail is rendered. Copy uses this
+    /// through `AppState`, so nothing is ever lost.
+    private(set) var fullTranscript = ""
+    /// Above this many lines the console shows the tail plus a notice, instead of
+    /// laying out a multi-screen wall of text.
+    static let maximumDisplayedLines = 400
     /// Set while the view itself is mutating the storage, so the edit guard does
     /// not reject its own changes.
     private var isApplyingInternalEdit = false
@@ -61,9 +67,16 @@ final class ConsoleTextView: NSTextView {
         font = Self.outputFont
         textContainerInset = NSSize(width: 8, height: 6)
         textContainer?.lineFragmentPadding = 2
+        // Grow with content so a long transcript can be scrolled instead of being
+        // clipped to one viewport. `isVerticallyResizable` alone does nothing
+        // without bounds: `maxSize.height` must be unbounded (a TextKit stack built
+        // by hand does not get sensible defaults from NSTextView).
         isVerticallyResizable = true
         isHorizontallyResizable = false
         autoresizingMask = [.width]
+        minSize = NSSize(width: 0, height: 0)
+        maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
+                         height: CGFloat.greatestFiniteMagnitude)
         textContainer?.widthTracksTextView = true
         textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
         typingAttributes = Self.inputAttributes
@@ -123,6 +136,13 @@ final class ConsoleTextView: NSTextView {
         static func inputAttributes(font: NSFont) -> [NSAttributedString.Key: Any] {
             [.font: font, .foregroundColor: input]
         }
+
+        /// Warning colour for the "output too long" notice.
+        static let notice = NSColor(name: "console.notice") { appearance in
+            appearance.isDark
+                ? NSColor(srgbRed: 0.95, green: 0.75, blue: 0.35, alpha: 1)
+                : NSColor(srgbRed: 0.62, green: 0.40, blue: 0.02, alpha: 1)
+        }
     }
 
     /// Applies the adaptive palette to this view and to its current text.
@@ -159,6 +179,10 @@ final class ConsoleTextView: NSTextView {
         Palette.inputAttributes(font: outputFont)
     }
 
+    static var noticeAttributes: [NSAttributedString.Key: Any] {
+        [.font: outputFont, .foregroundColor: Palette.notice]
+    }
+
     /// The hint colour, resolved for the current appearance.
     static var terminalHintText: NSColor { Palette.hint }
 
@@ -178,6 +202,14 @@ final class ConsoleTextView: NSTextView {
     /// what the user is typing stays at the end.
     func appendOutput(_ text: String) {
         guard !text.isEmpty else { return }
+        fullTranscript += text
+        // While the transcript is short enough to show whole, append in place (fast
+        // path). Once it exceeds the cap, re-render the tail so the view never
+        // grows without bound.
+        if Self.lineCount(in: fullTranscript) > Self.maximumDisplayedLines {
+            renderTranscriptTail()
+            return
+        }
         isApplyingInternalEdit = true
         let insertionPoint = transcriptLength
         let inputRange = NSRange(location: transcriptLength,
@@ -214,6 +246,11 @@ final class ConsoleTextView: NSTextView {
     /// Rebuilds the transcript wholesale (used when output is cleared or when the
     /// console is restored after a tab switch).
     func replaceTranscript(_ text: String) {
+        fullTranscript = text
+        if Self.lineCount(in: text) > Self.maximumDisplayedLines {
+            renderTranscriptTail()
+            return
+        }
         isApplyingInternalEdit = true
         let pending = pendingInput
         let combined = text + pending
@@ -231,6 +268,49 @@ final class ConsoleTextView: NSTextView {
         transcriptLength = (text as NSString).length
         setSelectedRange(NSRange(location: (string as NSString).length, length: 0))
         scrollToEnd()
+    }
+
+    /// Renders the notice plus the last `maximumDisplayedLines` lines of
+    /// `fullTranscript`.
+    private func renderTranscriptTail() {
+        let lines = fullTranscript.components(separatedBy: "\n")
+        // A trailing newline yields an empty last element; keep it so line counts
+        // stay honest.
+        let total = lines.count - (lines.last?.isEmpty == true ? 1 : 0)
+        let tail = lines.suffix(Self.maximumDisplayedLines).joined(separator: "\n")
+        let notice = L10n.t("console.tooLong", total, Self.maximumDisplayedLines)
+        let displayed = notice + "\n" + tail
+
+        isApplyingInternalEdit = true
+        let pending = pendingInput
+        let combined = displayed + pending
+        textStorage?.beginEditing()
+        textStorage?.replaceCharacters(in: NSRange(location: 0, length: (string as NSString).length),
+                                       with: combined)
+        textStorage?.setAttributes(Self.noticeAttributes,
+                                   range: NSRange(location: 0, length: (notice as NSString).length))
+        let tailStart = (notice as NSString).length + 1
+        if (tail as NSString).length > 0 {
+            textStorage?.setAttributes(Self.outputAttributes,
+                                       range: NSRange(location: tailStart, length: (tail as NSString).length))
+        }
+        if !pending.isEmpty {
+            textStorage?.setAttributes(Self.inputAttributes,
+                                       range: NSRange(location: (displayed as NSString).length,
+                                                      length: (pending as NSString).length))
+        }
+        textStorage?.endEditing()
+        isApplyingInternalEdit = false
+        transcriptLength = (displayed as NSString).length
+        setSelectedRange(NSRange(location: (string as NSString).length, length: 0))
+        scrollToEnd()
+    }
+
+    /// Number of newline-separated lines in `text`.
+    static func lineCount(in text: String) -> Int {
+        guard !text.isEmpty else { return 0 }
+        let newlines = text.reduce(0) { $1 == "\n" ? $0 + 1 : $0 }
+        return newlines + (text.hasSuffix("\n") ? 0 : 1)
     }
 
     /// Echoes a submitted line into the transcript as user input.
@@ -325,12 +405,24 @@ final class ConsoleTextView: NSTextView {
         return menu
     }
 
+    /// Copies the complete transcript, including the part not rendered when the
+    /// output is too long to display.
     @objc func copyAll(_ sender: Any?) {
-        let all = string
+        let all = fullTranscript.isEmpty ? string : fullTranscript
         guard !all.isEmpty else { return }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(all, forType: .string)
+    }
+
+    /// Text to place on the pasteboard for a copy action: the selection when there
+    /// is one, otherwise the complete transcript.
+    func textForCopy() -> String {
+        let selected = selectedRange()
+        if selected.length > 0 {
+            return (string as NSString).substring(with: selected)
+        }
+        return fullTranscript.isEmpty ? string : fullTranscript
     }
 
     /// Sends whatever is typed in the console (used by the Return button too).
@@ -422,10 +514,12 @@ extension ConsoleTextView {
     /// Keeps the text view in step with the authoritative transcript in
     /// `AppState`, appending only what is new.
     func syncTranscript(_ output: String) {
-        let displayed = transcriptText
-        if output == displayed { return }
-        if output.hasPrefix(displayed) {
-            appendOutput(String(output.dropFirst(displayed.count)))
+        // Compare against the full transcript, not the rendered one: when the view
+        // is showing only a tail, `transcriptText` is a shortened version and a
+        // prefix check against it would wrongly rebuild on every update.
+        guard output != fullTranscript else { return }
+        if output.hasPrefix(fullTranscript) {
+            appendOutput(String(output.dropFirst(fullTranscript.count)))
         } else {
             replaceTranscript(output)
         }

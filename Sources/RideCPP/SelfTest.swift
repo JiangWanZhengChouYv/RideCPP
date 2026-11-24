@@ -291,19 +291,17 @@ final class SelfTestRunner {
                    consoleHintContrastsInBothAppearances(),
                    paletteDescription)
 
-        // 7a3. A program printing many lines must not lose any in the console.
-        //      Long output used to look truncated, so this walks the real view.
+        // 7a3. Data is never lost, regardless of how much is displayed: the full
+        //      transcript keeps every line even when only the tail is rendered.
         if let console = ConsoleView.liveConsole {
-            let savedTranscript = console.transcriptText
-            let savedSelection = console.selectedRange()
+            let savedFull = console.fullTranscript
             defer {
                 console.clearPendingInput()
-                console.replaceTranscript(savedTranscript)
-                console.setSelectedRange(savedSelection)
+                console.replaceTranscript(savedFull)
             }
             console.clearPendingInput()
             console.replaceTranscript("")
-            let expected = 800
+            let expected = 300   // below the display cap: everything should render
             for index in 0..<expected {
                 console.appendOutput("line \(index)\n")
             }
@@ -312,8 +310,49 @@ final class SelfTestRunner {
             record("console-keeps-long-output",
                    produced == expected
                        && text.contains("line 0\n")
-                       && text.contains("line \(expected - 1)\n"),
-                   "lines=\(produced)/\(expected) chars=\(text.count)")
+                       && text.contains("line \(expected - 1)\n")
+                       && console.fullTranscript.contains("line 0\n"),
+                   "rendered=\(produced)/\(expected) full=\(console.fullTranscript.count) chars")
+        }
+
+        // 7a4. Very long output is not laid out in full: the console shows a
+        //      notice plus the tail, and copying still yields everything.
+        if let console = ConsoleView.liveConsole {
+            let savedTranscript = console.transcriptText
+            let savedFull = console.fullTranscript
+            defer {
+                console.clearPendingInput()
+                console.replaceTranscript(savedFull.isEmpty ? savedTranscript : savedFull)
+            }
+            console.clearPendingInput()
+            console.replaceTranscript("")
+            let total = ConsoleTextView.maximumDisplayedLines + 250
+            for index in 0..<total {
+                console.appendOutput("row \(index)\n")
+            }
+            console.displayIfNeeded()
+            if let rep = console.bitmapImageRepForCachingDisplay(in: console.bounds) {
+                console.cacheDisplay(in: console.bounds, to: rep)
+                if let data = rep.representation(using: .png, properties: [:]) {
+                    let directory = URL(fileURLWithPath: reportPath).deletingLastPathComponent()
+                    try? data.write(to: directory.appendingPathComponent("ridecpp-console-too-long.png"))
+                }
+            }
+            let rendered = console.transcriptText
+            let renderedLines = rendered.components(separatedBy: "\n").count
+            let full = console.fullTranscript
+            let fullLines = full.components(separatedBy: "\n").count - 1
+            console.copyAll(nil)
+            let copied = NSPasteboard.general.string(forType: .string) ?? ""
+            let copiedLines = copied.components(separatedBy: "\n").count - 1
+            record("console-truncates-display-not-data",
+                   renderedLines <= ConsoleTextView.maximumDisplayedLines + 3
+                       && fullLines == total
+                       && copiedLines == total
+                       && rendered.contains("输出过长")
+                       && rendered.contains("row \(total - 1)")
+                       && !rendered.contains("row 0\n"),
+                   "rendered=\(renderedLines) full=\(fullLines) copied=\(copiedLines)")
         }
 
         // 7b. Copy all puts the transcript on the pasteboard.
@@ -499,7 +538,15 @@ final class SelfTestRunner {
             // width tells us the container was laid out.
             let frameDescription = "\(Int(frame.width))x\(Int(frame.height))"
             let containerDescription = "\(Int(containerWidth))"
-            record("open-file-visible",
+            // A non-zero container is not enough: the text view inside it must have a
+        // usable size too. A fixed intrinsic height on the host broke this while
+        // still reporting a laid-out container.
+        let innerSize = opened.engine.scrollView.frame.size
+        let docSize = opened.engine.scrollView.documentView?.frame.size ?? .zero
+        record("editor-inner-view-sized",
+               innerSize.width > 200 && innerSize.height > 100 && docSize.width > 200,
+               "scroll=\(Int(innerSize.width))x\(Int(innerSize.height)) doc=\(Int(docSize.width))x\(Int(docSize.height))")
+        record("open-file-visible",
                    opened.engine.textView.string.contains("int main()")
                        && frame.width > 100 && frame.height > 50
                        && containerWidth > 100,

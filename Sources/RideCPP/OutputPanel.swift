@@ -88,11 +88,9 @@ struct OutputPanel: View {
         switch state.outputSegment {
         case .console:
             if let console = ConsoleView.liveConsole {
-                let selected = console.selectedRange()
-                if selected.length > 0 {
-                    return (console.string as NSString).substring(with: selected)
-                }
-                return console.string
+                // `textForCopy` returns the full transcript, not just the tail that
+                // may be rendered, so "copy" always yields everything.
+                return console.textForCopy()
             }
             return state.outputText
         case .problems:
