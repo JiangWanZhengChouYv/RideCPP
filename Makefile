@@ -70,8 +70,12 @@ run: build
 INSTALL_DIR := /Applications
 INSTALLED_APP := $(INSTALL_DIR)/RideCPP.app
 
+# Copying into /Applications replaces the app the user actually runs, so it is
+# opt-in. `make install` builds into build/ and stops; only
+# `make install RELEASE=1` replaces /Applications/RideCPP.app.
 install: build
-	@echo "Installing into $(INSTALL_DIR)…"
+ifeq ($(filter 1,$(RELEASE) $(RUN_INSTALL_APP)),1)
+	@echo "Explicit install requested; replacing $(INSTALLED_APP)."
 	@rm -rf "$(INSTALLED_APP)"
 	@cp -R "$(APP)" "$(INSTALLED_APP)"
 	@# Ad-hoc sign in place so the copied bundle keeps a valid signature.
@@ -85,6 +89,11 @@ install: build
 		-u "$(CURDIR)/build/Build/Products/$(CONFIGURATION)/RideCPP.app" >/dev/null 2>&1 || true
 	@echo "Installed: $(INSTALLED_APP)"
 	@open "$(INSTALLED_APP)"
+else
+	@echo "Refusing to replace $(INSTALLED_APP) automatically."
+	@echo "Built app: $(APP)"
+	@echo "Run it from there, or: make install RELEASE=1"
+endif
 
 # ---------------------------------------------------------------------------
 # Distribution

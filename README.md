@@ -98,6 +98,7 @@ make build      # 构建，产物在 build/Build/Products/Debug/RideCPP.app
 make run        # 构建并启动
 make install    # 安装到 /Applications 并启动（替换旧版本）
 make dist       # 构建 Release 通用版并打包 dist/RideCPP-*.dmg
+make install RELEASE=1   # 只有显式加 RELEASE=1 才会替换 /Applications 里的应用
 make test       # 运行单元测试
 make selftest   # 驱动真实 app 做端到端验收检查
 make verify     # 构建 + 单元测试 + 端到端检查 + 工具链冒烟测试
@@ -221,6 +222,12 @@ xattr -d com.apple.quarantine /Applications/RideCPP.app
 产物在 `dist/RideCPP-<版本>-<架构>.dmg`（内含 App、Applications 快捷方式和一份安装说明）。
 
 **为什么不走 Mac App Store**：RideCPP 需要调用本机的 `clang++`/`g++` 并运行生成的可执行文件，App Store 要求的 App Sandbox 会阻断子进程，所以只能通过网站/DMG 直接分发（签名 + 公证是唯一正规路径）。
+
+## 开发约定 / Development rule
+
+`make install` **默认只构建到 `build/`，不会碰 `/Applications`**。要替换已安装的应用必须显式写 `make install RELEASE=1`。
+
+原因：`/Applications/RideCPP.app` 是日常在用的稳定版本，开发迭代不应该覆盖它。日常开发请直接运行 `build/Build/Products/Debug/RideCPP.app`，或在另一个目录里放测试副本。
 
 ## 工程结构 / Layout
 
