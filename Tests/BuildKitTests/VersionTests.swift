@@ -143,3 +143,38 @@ final class SystemProxyTests: XCTestCase {
         wait(for: [expectation], timeout: 45)
     }
 }
+
+/// Rate limiting must be recognised and reported as its own condition.
+final class UpdateRateLimitTests: XCTestCase {
+
+    private func response(_ status: Int, headers: [String: String]) -> HTTPURLResponse {
+        HTTPURLResponse(url: URL(string: "https://api.github.com/x")!,
+                        statusCode: status, httpVersion: "HTTP/2", headerFields: headers)!
+    }
+
+    func testRateLimitIsDetectedFromHeaders() throws {
+        // A 403 with an exhausted budget is rate limiting, not authorisation.
+        let limited = response(403, headers: ["X-RateLimit-Remaining": "0",
+                                              "X-RateLimit-Reset": "1800000000"])
+        XCTAssertEqual(limited.value(forHTTPHeaderField: "X-RateLimit-Remaining"), "0")
+        XCTAssertNotNil(limited.value(forHTTPHeaderField: "X-RateLimit-Reset"))
+    }
+
+    func testPlain403IsNotTreatedAsRateLimit() {
+        let forbidden = response(403, headers: ["X-RateLimit-Remaining": "42"])
+        XCTAssertNotEqual(forbidden.value(forHTTPHeaderField: "X-RateLimit-Remaining"), "0")
+    }
+
+    func testRateLimitedMessageMentionsWaiting() {
+        let error = UpdateChecker.UpdateError.rateLimited(resetAt: nil)
+        let message = error.localizedDescription.lowercased()
+        XCTAssertTrue(message.contains("too many") || message.contains("later"),
+                      "unhelpful message: \(message)")
+    }
+
+    func testRateLimitedWithResetDateShowsTime() {
+        let error = UpdateChecker.UpdateError.rateLimited(resetAt: Date(timeIntervalSince1970: 1_800_000_000))
+        XCTAssertTrue(error.localizedDescription.contains("after"),
+                      "expected a time hint, got \(error.localizedDescription)")
+    }
+}

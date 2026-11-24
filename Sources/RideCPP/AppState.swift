@@ -312,14 +312,31 @@ public final class AppState: ObservableObject {
     @Published public private(set) var isCheckingForUpdates = false
 
     /// Asks GitHub for a newer release. Silent on failure (offline is normal).
+    /// How long to wait before an automatic (non user-initiated) check repeats.
+    /// GitHub allows 60 unauthenticated API calls per hour, so an app that checks on
+    /// every launch would exhaust that; a few hours is plenty for an update.
+    private static let automaticCheckInterval: TimeInterval = 6 * 60 * 60
+    private static let lastCheckKey = "update.lastAutomaticCheck"
+
     public func checkForUpdates(userInitiated: Bool = false) {
         guard !isCheckingForUpdates else { return }
+        if !userInitiated {
+            let last = UserDefaults.standard.double(forKey: Self.lastCheckKey)
+            let elapsed = Date().timeIntervalSince1970 - last
+            // A clock that moved backwards (or a first run) simply checks.
+            if last > 0, elapsed >= 0, elapsed < Self.automaticCheckInterval { return }
+        }
         isCheckingForUpdates = true
         let current = SemanticVersion.current()
         Task { [weak self] in
             defer { self?.isCheckingForUpdates = false }
             do {
                 let release = try await UpdateChecker.checkForUpdate(current: current)
+                // Record only a successful automatic check, so a failure (offline,
+                // rate limited) is retried next launch instead of being suppressed.
+                if !userInitiated {
+                    UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastCheckKey)
+                }
                 guard let self else { return }
                 if let release {
                     self.availableUpdate = release
@@ -329,7 +346,15 @@ public final class AppState: ObservableObject {
                 }
             } catch {
                 guard userInitiated, let self else { return }
-                self.presentInfo(L10n.t("update.failed.title"), info: error.localizedDescription)
+                // Rate limiting is a normal condition, not a failure of the app: say
+                // so plainly instead of showing a raw HTTP status.
+                if let updateError = error as? UpdateChecker.UpdateError,
+                   case .rateLimited = updateError {
+                    self.presentInfo(L10n.t("update.rateLimited.title"),
+                                     info: L10n.t("update.rateLimited.message"))
+                } else {
+                    self.presentInfo(L10n.t("update.failed.title"), info: error.localizedDescription)
+                }
             }
         }
     }

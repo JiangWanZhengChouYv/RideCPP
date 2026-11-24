@@ -107,20 +107,43 @@ public enum UpdateChecker {
         // GitHub asks API clients to identify themselves.
         request.setValue("RideCPP-Updater", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await URLSession.shared.data(for: request)
-        if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-            throw UpdateError.httpStatus(http.statusCode)
+        if let http = response as? HTTPURLResponse {
+            if http.statusCode == 403 || http.statusCode == 429 {
+                // Distinguish "rate limited" from a genuine refusal: GitHub sends
+                // `X-RateLimit-Remaining: 0` and a reset timestamp in that case.
+                let remaining = http.value(forHTTPHeaderField: "X-RateLimit-Remaining")
+                let resetHeader = http.value(forHTTPHeaderField: "X-RateLimit-Reset")
+                let resetAt = resetHeader.flatMap { TimeInterval($0) }.map { Date(timeIntervalSince1970: $0) }
+                if remaining == "0" || http.statusCode == 429 {
+                    throw UpdateError.rateLimited(resetAt: resetAt)
+                }
+            }
+            guard http.statusCode == 200 else {
+                throw UpdateError.httpStatus(http.statusCode)
+            }
         }
         return data
     }
 
     public enum UpdateError: LocalizedError {
         case httpStatus(Int)
+        /// GitHub's unauthenticated API allows 60 requests per hour; a busy user
+        /// can hit that, and it must not look like a broken app.
+        case rateLimited(resetAt: Date?)
         case malformedResponse
 
         public var errorDescription: String? {
             switch self {
             case .httpStatus(let code):
                 return code == 404 ? "No published release found." : "GitHub returned status \(code)."
+            case .rateLimited(let resetAt):
+                if let resetAt {
+                    let formatter = DateFormatter()
+                    formatter.timeStyle = .short
+                    formatter.dateStyle = .none
+                    return "Too many update checks; try again after \(formatter.string(from: resetAt))."
+                }
+                return "Too many update checks; try again later."
             case .malformedResponse:
                 return "Could not read the release information."
             }
