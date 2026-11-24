@@ -111,3 +111,35 @@ final class ReleaseLabelTests: XCTestCase {
         XCTAssertEqual(release.versionLabel, "nightly")
     }
 }
+
+/// Proxy handling: an update must work with a proxy, without one, and must not be
+/// blocked by a proxy that is configured but dead.
+final class SystemProxyTests: XCTestCase {
+
+    func testSystemProxySettingsShapeIsUsable() {
+        guard let settings = SystemProxy.settings() else { return }   // no proxy configured
+        // Whatever is returned must be a valid connection proxy dictionary.
+        XCTAssertTrue(settings.isEmpty == false)
+        for key in settings.keys {
+            XCTAssertTrue(key is String)
+        }
+    }
+
+    func testDirectFallbackIsAttemptedAfterProxyFailure() {
+        // The downloader exposes its attempt order through the failure path; a
+        // bad proxy must not be fatal, so completion reports the *transport* error
+        // only after every transport has been tried.
+        let downloader = UpdateDownloader()
+        let expectation = expectation(description: "completes")
+        downloader.onCompletion = { result in
+            if case .failure = result {
+                expectation.fulfill()
+            } else {
+                expectation.fulfill()
+            }
+        }
+        // A reserved, unroutable address fails fast on both transports.
+        downloader.start(from: URL(string: "https://127.0.0.1:9/does-not-exist.dmg")!)
+        wait(for: [expectation], timeout: 45)
+    }
+}

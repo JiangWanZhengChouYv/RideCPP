@@ -173,3 +173,11 @@
 "output.copy" = "复制";
 "output.selectAll" = "全选";
 "console.tooLong" = "—— 输出过长（共 %d 行），请复制后查看完整内容。以下是最后 %d 行 ——";
+
+"update.install" = "下载并安装";
+"update.downloading" = "正在下载 RideCPP %@…";
+"update.installing" = "正在安装更新…";
+"update.relaunching" = "正在重启…";
+"update.failed.short" = "更新失败：%@";
+"update.cancel" = "取消下载";
+"update.retry" = "重试";

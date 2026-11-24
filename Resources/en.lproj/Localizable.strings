@@ -173,3 +173,11 @@
 "output.copy" = "Copy";
 "output.selectAll" = "Select All";
 "console.tooLong" = "—— Output is long (%d lines); copy it to see everything. Showing the last %d lines. ——";
+
+"update.install" = "Download & Install";
+"update.downloading" = "Downloading RideCPP %@…";
+"update.installing" = "Installing update…";
+"update.relaunching" = "Relaunching…";
+"update.failed.short" = "Update failed: %@";
+"update.cancel" = "Cancel download";
+"update.retry" = "Retry";

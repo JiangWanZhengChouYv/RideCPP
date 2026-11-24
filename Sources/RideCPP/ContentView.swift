@@ -124,30 +124,123 @@ struct ContentView: View {
         }
     }
 
-    /// Non-blocking notice when a newer release exists.
+    /// Non-blocking notice when a newer release exists, with live download
+    /// progress once the update is being fetched.
     private func updateBanner(_ update: ReleaseInfo) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: "arrow.down.circle.fill")
-                .foregroundStyle(Color.accentColor)
+            Image(systemName: bannerIcon)
+                .foregroundStyle(bannerTint)
                 .font(.system(size: 11))
-            Text(L10n.t("update.available.message", update.versionLabel))
+
+            Text(bannerTitle(update))
+                .font(.system(size: 11))
+                .lineLimit(1)
+
+            if case .downloading = state.updatePhase {
+                // A determinate bar, driven by bytes actually received.
+                ProgressView(value: state.updateProgress)
+                    .progressViewStyle(.linear)
+                    .frame(width: 150)
+                Text(progressLabel)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 96, alignment: .leading)
+            }
+
+            bannerAction(update)
+
+            Spacer()
+
+            if case .downloading = state.updatePhase {
+                Button {
+                    state.cancelUpdateDownload()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(L10n.t("update.cancel"))
+            } else if case .failed = state.updatePhase {
+                Button {
+                    state.updatePhase = .idle
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            } else if case .idle = state.updatePhase {
+                Button {
+                    state.availableUpdate = nil
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 26)
+        .background(bannerTint.opacity(0.12))
+    }
+
+    private var bannerIcon: String {
+        switch state.updatePhase {
+        case .downloading: return "arrow.down.circle"
+        case .installing, .readyToRelaunch: return "arrow.triangle.2.circlepath"
+        case .failed: return "exclamationmark.triangle.fill"
+        case .idle: return "arrow.down.circle.fill"
+        }
+    }
+
+    private var bannerTint: Color {
+        if case .failed = state.updatePhase { return .orange }
+        return .accentColor
+    }
+
+    private func bannerTitle(_ update: ReleaseInfo) -> String {
+        switch state.updatePhase {
+        case .idle:
+            return L10n.t("update.available.message", update.versionLabel)
+        case .downloading:
+            return L10n.t("update.downloading", update.versionLabel)
+        case .installing:
+            return L10n.t("update.installing")
+        case .readyToRelaunch:
+            return L10n.t("update.relaunching")
+        case .failed(let message):
+            return L10n.t("update.failed.short", message)
+        }
+    }
+
+    private var progressLabel: String {
+        let megabytes = Double(state.updateBytes.received) / (1024 * 1024)
+        let total = Double(state.updateBytes.total) / (1024 * 1024)
+        if total > 0 {
+            return String(format: "%.1f / %.1f MB", megabytes, total)
+        }
+        return String(format: "%.1f MB", megabytes)
+    }
+
+    @ViewBuilder
+    private func bannerAction(_ update: ReleaseInfo) -> some View {
+        switch state.updatePhase {
+        case .idle:
+            Button(L10n.t("update.install")) { state.installAvailableUpdate() }
+                .buttonStyle(.link)
                 .font(.system(size: 11))
             Button(L10n.t("update.download")) { state.openAvailableUpdate() }
                 .buttonStyle(.link)
                 .font(.system(size: 11))
-            Spacer()
-            Button {
-                state.availableUpdate = nil
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
+        case .downloading, .installing, .readyToRelaunch:
+            EmptyView()
+        case .failed:
+            Button(L10n.t("update.retry")) { state.installAvailableUpdate() }
+                .buttonStyle(.link)
+                .font(.system(size: 11))
         }
-        .padding(.horizontal, 10)
-        .frame(height: 24)
-        .background(Color.accentColor.opacity(0.12))
     }
 
     private var statusBar: some View {

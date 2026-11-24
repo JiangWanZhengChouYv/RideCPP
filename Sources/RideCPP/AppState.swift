@@ -335,9 +335,99 @@ public final class AppState: ObservableObject {
     }
 
     /// Opens the release page, where the .dmg is attached.
+    /// Opens the release page in a browser (manual fallback).
     public func openAvailableUpdate() {
         guard let url = availableUpdate?.htmlURL else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    // MARK: - In-app update
+
+    public enum UpdatePhase: Equatable {
+        case idle
+        case downloading
+        case installing
+        case failed(String)
+        case readyToRelaunch
+    }
+
+    @Published public var updatePhase: UpdatePhase = .idle
+    /// 0...1 while downloading.
+    @Published public var updateProgress: Double = 0
+    @Published public var updateBytes: (received: Int64, total: Int64) = (0, 0)
+    private var updateDownloader: UpdateDownloader?
+
+    /// Downloads the release disk image and installs it, then relaunches.
+    public func installAvailableUpdate() {
+        guard let release = availableUpdate else { return }
+        guard let downloadURL = release.downloadURL else {
+            // No asset to fetch: fall back to the release page.
+            openAvailableUpdate()
+            return
+        }
+        guard updatePhase != .downloading && updatePhase != .installing else { return }
+
+        updatePhase = .downloading
+        updateProgress = 0
+        updateBytes = (0, 0)
+
+        let downloader = UpdateDownloader()
+        updateDownloader = downloader
+        downloader.onProgress = { [weak self] fraction, received, total in
+            self?.updateProgress = fraction
+            self?.updateBytes = (received, total)
+        }
+        downloader.onCompletion = { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let file):
+                self.installDownloadedUpdate(file)
+            case .failure(let error):
+                self.updatePhase = .failed(error.localizedDescription)
+            }
+        }
+        downloader.start(from: downloadURL)
+    }
+
+    public func cancelUpdateDownload() {
+        updateDownloader?.cancel()
+        updateDownloader = nil
+        updatePhase = .idle
+        updateProgress = 0
+    }
+
+    private func installDownloadedUpdate(_ file: URL) {
+        updatePhase = .installing
+        let destination = Bundle.main.bundleURL
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                let staged = try UpdateInstaller.install(diskImage: file, destination: destination)
+                let script = try UpdateInstaller.scheduleRelaunch(staged: staged, destination: destination)
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.updatePhase = .readyToRelaunch
+                    // Quit so the helper can replace the bundle, which then reopens
+                    // the app automatically.
+                    self.persistBeforeUpdating()
+                    let launcher = Process()
+                    launcher.executableURL = URL(fileURLWithPath: "/bin/bash")
+                    launcher.arguments = [script.path]
+                    try? launcher.run()
+                    NSApp.terminate(nil)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self?.updatePhase = .failed(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    /// Saves open documents so nothing is lost across the relaunch.
+    private func persistBeforeUpdating() {
+        for document in documents where document.isDirty && document.fileURL != nil {
+            _ = save(document: document)
+        }
     }
 
     private func presentInfo(_ message: String, info: String) {
