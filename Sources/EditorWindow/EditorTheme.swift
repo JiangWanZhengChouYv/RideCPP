@@ -44,6 +44,7 @@ public enum EditorTheme {
                                           light: NSColor(white: 0.30, alpha: 1),
                                           dark: NSColor(white: 0.72, alpha: 1))
     public static let errorUnderline = NSColor.systemRed
+    public static let warningUnderline = NSColor.systemOrange
 
     public static let lineNumberText = theme("lineNumber",
                                              light: NSColor(white: 0.52, alpha: 1),

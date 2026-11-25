@@ -690,6 +690,45 @@ final class SelfTestRunner {
             SettingsStore.shared.compilerPath = clang.path
         }
 
+        // 11b. Live diagnostics: clangd must underline a real type error without
+        //      compiling. This is the "errors while typing" path.
+        let diagDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RideCPP-diag-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: diagDir, withIntermediateDirectories: true)
+        let diagFile = diagDir.appendingPathComponent("bad.cpp")
+        let diagSource = """
+        struct Point { int x; int y; };
+        int main() {
+            Point p;
+            p.notAMember();
+            return 0;
+        }
+        """
+        try? diagSource.write(to: diagFile, atomically: true, encoding: .utf8)
+        let diagDocumentsBefore = state.documents.count
+        state.open(urls: [diagFile])
+        var liveSeen: [LSPDiagnostic] = []
+        let diagDeadline = Date().addingTimeInterval(20)
+        while Date() < diagDeadline {
+            if let opened = state.selectedDocument, opened.fileURL == diagFile {
+                opened.engine.textView.string = diagSource
+                if let semantic = opened.engine.textView.completionProvider as? SemanticCompletionProvider {
+                    semantic.syncDocument(text: diagSource, fileURL: diagFile)
+                }
+            }
+            liveSeen = state.liveDiagnostics
+            if liveSeen.contains(where: { $0.code == "no_member" }) { break }
+            for _ in 0..<10 { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let memberError = liveSeen.first { $0.code == "no_member" }
+        record("live-diagnostics-from-clangd",
+               memberError != nil && memberError?.severity == .error,
+               "count=\(liveSeen.count) code=\(memberError?.code ?? "-") msg=\(escaped(String((memberError?.message ?? "-").prefix(40))))")
+        // Restore the tab count for the checks that follow.
+        if let opened = state.selectedDocument, state.documents.count > diagDocumentsBefore {
+            state.close(document: opened)
+        }
         finish()
     }
 

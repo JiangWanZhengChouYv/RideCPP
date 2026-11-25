@@ -349,6 +349,8 @@ public final class AppState: ObservableObject {
     /// Recomputes whether Undo/Redo are available for whatever is focused.
     /// Semantic (clangd) completion state, for settings and diagnostics.
     @Published public var semanticCompletionReady = false
+    /// Most recent live diagnostics, exposed for the Problems panel.
+    @Published public var liveDiagnostics: [LSPDiagnostic] = []
     private var semanticProvider: SemanticCompletionProvider?
     /// Workspace root clangd is bound to.
     private var semanticWorkspace: URL?
@@ -372,6 +374,94 @@ public final class AppState: ObservableObject {
             provider.syncDocument(text: document.text, fileURL: document.fileURL)
         }
         semanticCompletionReady = provider.isSemanticReady
+        // Live diagnostics from clangd: underline the ranges it reports.
+        provider.onDiagnostics = { [weak self] url, items in
+            self?.applyLiveDiagnostics(items, for: url)
+        }
+        // Hover documentation, shown as a floating hint.
+        for document in documents {
+            wireHoverAndNavigation(document, provider: provider)
+        }
+    }
+
+    /// Converts clangd diagnostics into editor underlines for the matching document.
+    ///
+    /// Positions arrive as LSP line/character pairs, which are 0-based and counted in
+    /// UTF-16 units — the same units `NSString` uses, so the conversion is direct.
+    private func applyLiveDiagnostics(_ items: [LSPDiagnostic], for url: URL) {
+        guard let document = documents.first(where: {
+            $0.fileURL?.standardizedFileURL == url.standardizedFileURL
+        }) else { return }
+        let ns = document.text as NSString
+        var inline: [CodeTextView.InlineDiagnostic] = []
+        for item in items {
+            guard let range = Self.characterRange(for: item.range, in: ns) else { continue }
+            let kind: CodeTextView.InlineDiagnostic.Kind = item.severity == .error ? .error : .warning
+            inline.append(.init(range: range, kind: kind, message: item.message))
+        }
+        document.engine.textView.setDiagnostics(inline)
+        liveDiagnostics = items
+    }
+
+    /// Maps an LSP range onto `NSString` offsets.
+    static func characterRange(for range: LSPRange, in text: NSString) -> NSRange? {
+        func offset(_ position: LSPPosition) -> Int? {
+            var line = 0
+            var index = 0
+            while line < position.line {
+                let found = text.range(of: "\n", options: [],
+                                       range: NSRange(location: index, length: text.length - index))
+                if found.location == NSNotFound { return nil }
+                index = found.location + 1
+                line += 1
+            }
+            return min(index + position.character, text.length)
+        }
+        guard let start = offset(range.start), let end = offset(range.end), end >= start else { return nil }
+        return NSRange(location: start, length: end - start)
+    }
+
+    /// Installs hover and go-to-definition on one document.
+    private func wireHoverAndNavigation(_ document: DocumentModel, provider: SemanticCompletionProvider) {
+        document.engine.textView.onHoverQuery = { [weak self, weak document] offset in
+            guard let self, let document else { return }
+            provider.hover(atUTCOffset: offset, in: document.text, fileURL: document.fileURL) { text in
+                guard let text, !text.isEmpty else {
+                    document.engine.textView.hideHover()
+                    return
+                }
+                document.engine.textView.showHover(text, at: offset)
+            }
+        }
+    }
+
+    /// Jumps to the definition of the symbol at the caret (⌘-click or a shortcut).
+    public func goToDefinition() {
+        guard let document = selectedDocument, let provider = semanticProvider else { return }
+        let tv = document.engine.textView
+        tv.hideHover()
+        var offset = tv.selectedRange().location
+        // If the caret sits at the end of a word, look at the previous character so
+        // the query lands inside the identifier.
+        if offset > 0, offset >= (document.text as NSString).length { offset -= 1 }
+        provider.definition(atOffset: offset, in: document.text, fileURL: document.fileURL) { [weak self] locations in
+            guard let self, let first = locations.first else { return }
+            self.openDefinition(first)
+        }
+    }
+
+    /// Opens the file holding a definition and places the caret on it.
+    private func openDefinition(_ location: LSPLocation) {
+        guard let url = URL(string: location.uri) else { return }
+        if let existing = documents.first(where: {
+            $0.fileURL?.standardizedFileURL.path == url.standardizedFileURL.path
+        }) {
+            select(existing.id)
+            existing.engine.jump(toLine: location.range.start.line + 1)
+        } else if FileManager.default.fileExists(atPath: url.path) {
+            open(urls: [url])
+            selectedDocument?.engine.jump(toLine: location.range.start.line + 1)
+        }
     }
 
     /// Points a newly opened document at the semantic provider as well.
@@ -383,6 +473,7 @@ public final class AppState: ObservableObject {
             provider.syncDocument(text: text, fileURL: url)
         }
         provider.syncDocument(text: document.text, fileURL: document.fileURL)
+        wireHoverAndNavigation(document, provider: provider)
     }
 
     /// Updates the breadcrumb symbol and the Ln/Col readout.

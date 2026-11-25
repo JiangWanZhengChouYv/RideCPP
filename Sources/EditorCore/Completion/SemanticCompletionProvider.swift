@@ -43,6 +43,57 @@ public final class SemanticCompletionProvider: CompletionProviding {
     /// Whether clangd finished its handshake.
     public var isSemanticReady: Bool { session.state == .ready }
 
+    /// Live diagnostics from clangd, keyed by file path.
+    ///
+    /// Delivered on the main queue. The editor underlines these ranges, which is what
+    /// gives "errors while typing" without running the compiler.
+    public var onDiagnostics: ((URL, [LSPDiagnostic]) -> Void)? {
+        get { diagnosticHandler }
+        set {
+            diagnosticHandler = newValue
+            // The session replays its last result to a new subscriber.
+            session.onDiagnostics = { [weak self] uri, items in
+                guard let self, let url = URL(string: uri) else { return }
+                self.diagnosticHandler?(url, items)
+            }
+        }
+    }
+
+    private var diagnosticHandler: ((URL, [LSPDiagnostic]) -> Void)?
+
+    /// Hover documentation at a character offset (main queue).
+    public func hover(atUTCOffset offset: Int, in text: String, fileURL: URL?,
+                      completion: @escaping (String?) -> Void) {
+        let url = fileURL ?? FileManager.default.temporaryDirectory
+            .appendingPathComponent("RideCPP-untitled.cpp")
+        let ns = text as NSString
+        let clamped = min(max(0, offset), ns.length)
+        let prefix = ns.substring(to: clamped)
+        let lines = prefix.components(separatedBy: "\n")
+        let position = LSPPosition(line: max(0, lines.count - 1),
+                                   character: (lines.last as NSString?)?.length ?? 0)
+        session.requestHover(uri: "file://" + url.path, position: position) { value in
+            DispatchQueue.main.async { completion(value) }
+        }
+    }
+
+    /// Definition location for the symbol at a character offset.
+    public func definition(atOffset offset: Int, in text: String, fileURL: URL?,
+                           completion: @escaping ([LSPLocation]) -> Void) {
+        let url = fileURL ?? FileManager.default.temporaryDirectory
+            .appendingPathComponent("RideCPP-untitled.cpp")
+        let ns = text as NSString
+        let clamped = min(max(0, offset), ns.length)
+        let prefix = ns.substring(to: clamped)
+        let lines = prefix.components(separatedBy: "\n")
+        let position = LSPPosition(line: max(0, lines.count - 1),
+                                   character: (lines.last as NSString?)?.length ?? 0)
+        session.requestDefinition(uri: "file://" + url.path, position: position) { locations in
+            DispatchQueue.main.async { completion(locations) }
+        }
+    }
+
+
     // MARK: - Document sync
 
     /// Pushes the current text to clangd. Cheap when unchanged.

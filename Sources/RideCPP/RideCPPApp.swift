@@ -102,6 +102,9 @@ struct AppCommands: Commands {
                 .disabled(state.isBuilding || state.isRunning || state.selectedDocument == nil)
             Button(L10n.t("build.run")) { state.build(andRun: true) }
             Divider()
+            Button(L10n.t("edit.goToDefinition")) { state.goToDefinition() }
+                .keyboardShortcut("d", modifiers: [.command])
+                .disabled(!state.semanticCompletionReady)
             Button(L10n.t("edit.complete")) { NSApp.sendAction(#selector(CodeTextView.showCompletions(_:)), to: nil, from: nil) }
                 .keyboardShortcut(" ", modifiers: .control)
                 .keyboardShortcut("r")

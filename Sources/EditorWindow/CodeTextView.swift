@@ -26,8 +26,14 @@ public final class CodeTextView: NSTextView {
     /// File this document corresponds to, used by semantic providers.
     public var documentFileURL: URL?
 
+    /// Asks for a hover query at a character offset (set by the app).
+    public var onHoverQuery: ((Int) -> Void)?
     /// Called after every edit so a semantic provider can keep its server in sync.
     public var onDocumentSync: ((String, URL?) -> Void)?
+    /// Inline diagnostics currently drawn.
+    private var diagnostics: [InlineDiagnostic] = []
+    /// Floating hover hint, if one is visible.
+    private var hoverPanel: NSPanel?
 
     /// Whether the completion list opens automatically while typing.
     public var autoCompletionEnabled = true
@@ -555,7 +561,138 @@ public final class CodeTextView: NSTextView {
         ], forCharacterRange: lineRange)
     }
 
+    /// One diagnostic to underline, in character offsets.
+    public struct InlineDiagnostic: Equatable {
+        public enum Kind: Equatable {
+            case error
+            case warning
+        }
+
+        public let range: NSRange
+        public let kind: Kind
+        public let message: String
+
+        public init(range: NSRange, kind: Kind, message: String) {
+            self.range = range
+            self.kind = kind
+            self.message = message
+        }
+    }
+
+    /// Tracks the mouse for hover queries.
+    public override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas where area.owner === self {
+            removeTrackingArea(area)
+        }
+        addTrackingArea(NSTrackingArea(rect: .zero,
+                                       options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect],
+                                       owner: self, userInfo: nil))
+    }
+
+    public override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        guard let onHoverQuery else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        guard let index = characterIndex(at: point) else { return }
+        onHoverQuery(index)
+    }
+
+    /// Character offset under a point, or nil when the point is past the text.
+    private func characterIndex(at point: NSPoint) -> Int? {
+        guard let layoutManager, let container = textContainer else { return nil }
+        let inContainer = NSPoint(x: point.x - textContainerInset.width,
+                                  y: point.y - textContainerInset.height)
+        let glyph = layoutManager.glyphIndex(for: inContainer, in: container)
+        let charIndex = layoutManager.characterIndexForGlyph(at: glyph)
+        return min(max(0, charIndex), (string as NSString).length)
+    }
+
+    /// Shows a floating hint near a character offset (hover documentation).
+    public func showHover(_ text: String, at character: Int) {
+        hideHover()
+        guard !text.isEmpty else { return }
+        let ns = string as NSString
+        let clamped = min(max(0, character), ns.length)
+        let lineRange = ns.lineRange(for: NSRange(location: clamped, length: 0))
+        let lineText = ns.substring(with: lineRange).trimmingCharacters(in: .whitespacesAndNewlines)
+        let width: CGFloat = min(460, max(260, CGFloat(lineText.count) * 7))
+        let label = NSTextField(wrappingLabelWithString: text)
+        label.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        label.textColor = .labelColor
+        label.drawsBackground = false
+        label.isEditable = false
+        label.isSelectable = false
+        label.preferredMaxLayoutWidth = width - 16
+        label.frame = NSRect(x: 8, y: 6, width: width - 16, height: 10)
+        label.sizeToFit()
+
+        let height = max(24, label.frame.height + 12)
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
+                            styleMask: [.borderless, .nonactivatingPanel],
+                            backing: .buffered, defer: false)
+        panel.isFloatingPanel = true
+        panel.level = .popUpMenu
+        panel.hasShadow = true
+        panel.backgroundColor = .windowBackgroundColor
+        panel.isOpaque = true
+        panel.contentView = label
+        label.frame = NSRect(x: 8, y: 6, width: width - 16, height: height - 12)
+
+        // Position just below the hovered line.
+        if let layoutManager, let container = textContainer, let window {
+            let glyphRange = layoutManager.glyphRange(forCharacterRange: NSRange(location: clamped, length: 0),
+                                                      actualCharacterRange: nil)
+            let lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyphRange.location, effectiveRange: nil)
+            var rect = lineRect
+            rect.origin.y += textContainerInset.height
+            rect.origin.x = textContainerInset.width
+            let inWindow = convert(rect, to: nil)
+            let onScreen = window.convertToScreen(inWindow)
+            panel.setFrameOrigin(NSPoint(x: onScreen.minX, y: onScreen.minY - height - 2))
+        }
+        panel.orderFront(nil)
+        hoverPanel = panel
+    }
+
+    /// Closes the hover hint.
+    public func hideHover() {
+        hoverPanel?.orderOut(nil)
+        hoverPanel = nil
+    }
+
+    /// Message for the diagnostic under `location`, for a tooltip.
+    public func diagnostic(at location: Int) -> InlineDiagnostic? {
+        diagnostics.first { NSLocationInRange(location, $0.range) || location == $0.range.location }
+    }
+
+    /// Replaces all inline diagnostics (live checks reported by clangd).
+    ///
+    /// Uses temporary attributes, so the marks never enter the text storage, never
+    /// trigger undo, and never get saved into the file.
+    public func setDiagnostics(_ items: [InlineDiagnostic]) {
+        diagnostics = items
+        guard let layoutManager else { return }
+        let ns = string as NSString
+        let full = NSRange(location: 0, length: ns.length)
+        layoutManager.removeTemporaryAttribute(.underlineColor, forCharacterRange: full)
+        layoutManager.removeTemporaryAttribute(.underlineStyle, forCharacterRange: full)
+        for item in items {
+            // Clamp: the server reports ranges against the text it last saw, which
+            // can be one edit behind ours.
+            let clamped = NSIntersectionRange(item.range, NSRange(location: 0, length: ns.length))
+            guard clamped.length > 0 else { continue }
+            let color = item.kind == .error ? EditorTheme.errorUnderline : EditorTheme.warningUnderline
+            layoutManager.addTemporaryAttributes([
+                .underlineStyle: NSUnderlineStyle.thick.rawValue | NSUnderlineStyle.patternDot.rawValue,
+                .underlineColor: color
+            ], forCharacterRange: clamped)
+        }
+    }
+
+    /// Removes every inline diagnostic.
     public func clearErrorMarkers() {
+        diagnostics = []
         guard let layoutManager else { return }
         let full = NSRange(location: 0, length: (string as NSString).length)
         layoutManager.removeTemporaryAttribute(.underlineColor, forCharacterRange: full)

@@ -26,6 +26,28 @@ public final class ClangdSession {
 
     /// Called on the main queue whenever `state` changes.
     public var onStateChange: ((State) -> Void)?
+    /// Diagnostics pushed by the server for a file, keyed by URI.
+    ///
+    /// clangd publishes these after every parse (debounced internally), which is
+    /// what makes live error checking possible without compiling.
+    public var onDiagnostics: ((String, [LSPDiagnostic]) -> Void)? {
+        didSet {
+            // Replay the most recent result: a subscriber set after the first
+            // publish (common: the editor attaches after the server starts) must
+            // not miss the diagnostics that already arrived.
+            lock.lock()
+            let snapshot = latestDiagnostics
+            lock.unlock()
+            if let snapshot {
+                DispatchQueue.main.async { [weak self] in
+                    self?.onDiagnostics?(snapshot.uri, snapshot.items)
+                }
+            }
+        }
+    }
+
+    /// Last diagnostics per URI, kept for late subscribers.
+    private var latestDiagnostics: (uri: String, items: [LSPDiagnostic])?
 
     public private(set) var state: State = .stopped {
         didSet {
@@ -233,6 +255,78 @@ public final class ClangdSession {
         }
     }
 
+    // MARK: - Navigation
+
+    /// Asks the server for the declaration/definition at a position.
+    ///
+    /// Returns every location the server reports, so a symbol declared in a header
+    /// and defined in a source file both come back.
+    public func requestDefinition(uri: String,
+                                  position: LSPPosition,
+                                  completion: @escaping ([LSPLocation]) -> Void) {
+        sendRequest(method: "textDocument/definition", params: [
+            "textDocument": ["uri": uri],
+            "position": ["line": position.line, "character": position.character]
+        ]) { result in
+            guard case .success(let value) = result else {
+                completion([])
+                return
+            }
+            completion(Self.locations(from: value))
+        }
+    }
+
+    /// Asks for hover text: type, signature and documentation.
+    public func requestHover(uri: String,
+                             position: LSPPosition,
+                             completion: @escaping (String?) -> Void) {
+        sendRequest(method: "textDocument/hover", params: [
+            "textDocument": ["uri": uri],
+            "position": ["line": position.line, "character": position.character]
+        ]) { result in
+            guard case .success(let value) = result,
+                  let payload = value as? [String: Any] else {
+                completion(nil)
+                return
+            }
+            // `contents` may be a string, a MarkupContent, or an array of either.
+            if let text = Self.markupText(payload["contents"]) {
+                completion(text.isEmpty ? nil : text)
+            } else {
+                completion(nil)
+            }
+        }
+    }
+
+    /// Asks for quick fixes at a range, given the diagnostics reported there.
+    ///
+    /// The diagnostics must be passed back: LSP expects the client to echo them, and
+    /// clangd returns no actions when the list is empty.
+    public func requestCodeActions(uri: String,
+                                   range: LSPRange,
+                                   diagnostics: [LSPDiagnostic],
+                                   completion: @escaping ([LSPCodeAction]) -> Void) {
+        let context: [String: Any] = [
+            "diagnostics": diagnostics.map(Self.diagnosticJSON),
+            "triggerKind": 1
+        ]
+        sendRequest(method: "textDocument/codeAction", params: [
+            "textDocument": ["uri": uri],
+            "range": [
+                "start": ["line": range.start.line, "character": range.start.character],
+                "end": ["line": range.end.line, "character": range.end.character]
+            ],
+            "context": context
+        ]) { result in
+            guard case .success(let value) = result,
+                  let actions = value as? [[String: Any]] else {
+                completion([])
+                return
+            }
+            completion(actions.compactMap(Self.codeAction(from:)))
+        }
+    }
+
     // MARK: - JSON-RPC
 
     private func sendRequest(method: String,
@@ -304,8 +398,11 @@ public final class ClangdSession {
     }
 
     private func handle(_ message: [String: Any]) {
-        // Responses carry an id; notifications (diagnostics) do not and are ignored.
-        guard let id = message["id"] as? Int else { return }
+        // Notifications have no id; they are how the server pushes diagnostics.
+        guard let id = message["id"] as? Int else {
+            handleNotification(message)
+            return
+        }
         lock.lock()
         let completion = pending.removeValue(forKey: id)
         lock.unlock()
@@ -314,6 +411,26 @@ public final class ClangdSession {
             completion(.failure(ServerFailure(message: error["message"] as? String ?? "clangd error")))
         } else {
             completion(.success(message["result"] ?? NSNull()))
+        }
+    }
+
+    /// Handles a server-initiated notification.
+    private func handleNotification(_ message: [String: Any]) {
+        guard let method = message["method"] as? String,
+              let params = message["params"] as? [String: Any] else { return }
+        switch method {
+        case "textDocument/publishDiagnostics":
+            guard let uri = params["uri"] as? String,
+                  let raw = params["diagnostics"] as? [[String: Any]] else { return }
+            let diagnostics = raw.compactMap(LSPDiagnostic.init(json:))
+            lock.lock()
+            latestDiagnostics = (uri, diagnostics)
+            let handler = onDiagnostics
+            lock.unlock()
+            DispatchQueue.main.async { handler?(uri, diagnostics) }
+        default:
+            // `window/logMessage`, `telemetry/event`, … are intentionally ignored.
+            break
         }
     }
 
@@ -337,6 +454,89 @@ public final class ClangdSession {
         process.waitUntilExit()
         return String(decoding: data, as: UTF8.self)
     }
+    // MARK: - Payload decoding
+
+    /// Extracts every location from a definition result.
+    static func locations(from value: Any) -> [LSPLocation] {
+        var raw: [[String: Any]] = []
+        if let list = value as? [[String: Any]] {
+            raw = list
+        } else if let single = value as? [String: Any] {
+            raw = [single]
+        }
+        return raw.compactMap { item in
+            guard let uri = item["uri"] as? String,
+                  let range = range(from: item["range"]) else { return nil }
+            return LSPLocation(uri: uri, range: range)
+        }
+    }
+
+    /// Decodes a range dictionary.
+    static func range(from value: Any?) -> LSPRange? {
+        guard let json = value as? [String: Any],
+              let start = json["start"] as? [String: Any],
+              let end = json["end"] as? [String: Any],
+              let startLine = start["line"] as? Int,
+              let startChar = start["character"] as? Int,
+              let endLine = end["line"] as? Int,
+              let endChar = end["character"] as? Int else { return nil }
+        return LSPRange(start: LSPPosition(line: startLine, character: startChar),
+                        end: LSPPosition(line: endLine, character: endChar))
+    }
+
+    /// Flattens LSP markup (string | MarkupContent | array of either) into text.
+    static func markupText(_ value: Any?) -> String? {
+        if let text = value as? String { return text }
+        if let json = value as? [String: Any] {
+            return json["value"] as? String
+        }
+        if let list = value as? [Any] {
+            let parts = list.compactMap { markupText($0) }.filter { !$0.isEmpty }
+            return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
+        }
+        return nil
+    }
+
+    /// Re-encodes a diagnostic so it can be sent back with a code-action request.
+    static func diagnosticJSON(_ diagnostic: LSPDiagnostic) -> [String: Any] {
+        var json: [String: Any] = [
+            "range": [
+                "start": ["line": diagnostic.range.start.line,
+                          "character": diagnostic.range.start.character],
+                "end": ["line": diagnostic.range.end.line,
+                        "character": diagnostic.range.end.character]
+            ],
+            "severity": diagnostic.severity.rawValue,
+            "message": diagnostic.message,
+            "source": "clang"
+        ]
+        if let code = diagnostic.code { json["code"] = code }
+        return json
+    }
+
+    /// Builds a code action, keeping the first workspace edit it carries.
+    static func codeAction(from json: [String: Any]) -> LSPCodeAction? {
+        guard let title = json["title"] as? String else { return nil }
+        guard let edit = json["edit"] as? [String: Any] else {
+            return LSPCodeAction(title: title, newText: nil, range: nil)
+        }
+        // Either a WorkspaceEdit with `changes`, or a documentChanges array.
+        if let changes = edit["changes"] as? [String: [[String: Any]]],
+           let first = changes.values.first?.first,
+           let newText = first["newText"] as? String {
+            return LSPCodeAction(title: title, newText: newText, range: range(from: first["range"]))
+        }
+        if let documentChanges = edit["documentChanges"] as? [[String: Any]],
+           let first = documentChanges.first,
+           let edits = first["edits"] as? [[String: Any]],
+           let edit0 = edits.first,
+           let newText = edit0["newText"] as? String {
+            return LSPCodeAction(title: title, newText: newText, range: range(from: edit0["range"]))
+        }
+        return LSPCodeAction(title: title, newText: nil, range: nil)
+    }
+
+
 }
 
 /// One completion entry as returned by clangd.
@@ -393,3 +593,105 @@ public struct LSPCompletionItem: Sendable, Equatable {
         }
     }
 }
+// MARK: - Protocol payloads
+
+/// A 0-based position in a document.
+public struct LSPPosition: Sendable, Equatable {
+    public let line: Int
+    public let character: Int
+
+    public init(line: Int, character: Int) {
+        self.line = line
+        self.character = character
+    }
+}
+
+/// A half-open range in a document.
+public struct LSPRange: Sendable, Equatable {
+    public let start: LSPPosition
+    public let end: LSPPosition
+
+    public init(start: LSPPosition, end: LSPPosition) {
+        self.start = start
+        self.end = end
+    }
+}
+
+/// One diagnostic as published by clangd.
+///
+/// `code` is a stable identifier (`no_member`, `undeclared_var_use`, …), which is
+/// what makes it possible to act on a problem beyond echoing its message.
+public struct LSPDiagnostic: Sendable, Equatable {
+    public enum Severity: Int, Sendable {
+        case error = 1
+        case warning = 2
+        case information = 3
+        case hint = 4
+    }
+
+    public let range: LSPRange
+    public let severity: Severity
+    public let message: String
+    public let code: String?
+    /// True when the server can offer an automatic fix.
+    public let hasFix: Bool
+
+    public init(range: LSPRange, severity: Severity, message: String, code: String?, hasFix: Bool) {
+        self.range = range
+        self.severity = severity
+        self.message = message
+        self.code = code
+        self.hasFix = hasFix
+    }
+
+    init?(json: [String: Any]) {
+        guard let rangeJSON = json["range"] as? [String: Any],
+              let startJSON = rangeJSON["start"] as? [String: Any],
+              let endJSON = rangeJSON["end"] as? [String: Any],
+              let startLine = startJSON["line"] as? Int,
+              let startChar = startJSON["character"] as? Int,
+              let endLine = endJSON["line"] as? Int,
+              let endChar = endJSON["character"] as? Int,
+              let message = json["message"] as? String else { return nil }
+        self.range = LSPRange(
+            start: LSPPosition(line: startLine, character: startChar),
+            end: LSPPosition(line: endLine, character: endChar)
+        )
+        self.severity = Severity(rawValue: json["severity"] as? Int ?? 3) ?? .information
+        self.message = message
+        // `code` may arrive as a string or a number.
+        if let text = json["code"] as? String {
+            self.code = text
+        } else if let number = json["code"] as? Int {
+            self.code = String(number)
+        } else {
+            self.code = nil
+        }
+        self.hasFix = (json["data"] as? [String: Any]).map { !$0.isEmpty } ?? false
+    }
+}
+
+/// A quick fix the server can apply.
+public struct LSPCodeAction: Sendable, Equatable {
+    public let title: String
+    public let newText: String?
+    public let range: LSPRange?
+
+    public init(title: String, newText: String?, range: LSPRange?) {
+        self.title = title
+        self.newText = newText
+        self.range = range
+    }
+}
+
+/// A location the server can navigate to.
+public struct LSPLocation: Sendable, Equatable {
+    public let uri: String
+    public let range: LSPRange
+
+    public init(uri: String, range: LSPRange) {
+        self.uri = uri
+        self.range = range
+    }
+}
+

@@ -182,3 +182,4 @@
 "update.retry" = "Retry";
 "update.rateLimited.title" = "Checked too often";
 "update.rateLimited.message" = "GitHub limits update checks to 60 per hour. Please try again later — RideCPP itself is working normally.";
+"edit.goToDefinition" = "Go to Definition";

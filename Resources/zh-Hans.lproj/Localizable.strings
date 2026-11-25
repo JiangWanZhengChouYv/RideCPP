@@ -182,3 +182,4 @@
 "update.retry" = "重试";
 "update.rateLimited.title" = "检查得太频繁了";
 "update.rateLimited.message" = "GitHub 限制每小时最多检查 60 次。请稍后再试——RideCPP 本身工作正常。";
+"edit.goToDefinition" = "跳转到定义";
