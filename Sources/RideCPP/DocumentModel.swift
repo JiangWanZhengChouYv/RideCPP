@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import EditorCore
+import EditorWindow
 
 /// One open editor tab: its editor engine, undo stack, file identity and
 /// dirty state.

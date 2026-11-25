@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import EditorCore
 import BuildKit
+import EditorWindow
 
 @main
 struct RideCPPApp: App {
@@ -47,8 +48,17 @@ struct AppCommands: Commands {
         }
 
         CommandGroup(after: .appInfo) {
-            Button(L10n.t("menu.checkForUpdates")) { state.checkForUpdates(userInitiated: true) }
-                .disabled(state.isCheckingForUpdates)
+            Button(L10n.t("menu.checkForUpdates")) {
+                // A manual check reports its outcome; a silent one would look
+                // broken when there is simply nothing new.
+                state.updates.check(userInitiated: true) { title, message in
+                    let alert = NSAlert()
+                    alert.messageText = title
+                    alert.informativeText = message
+                    alert.addButton(withTitle: "OK")
+                    alert.runModal()
+                }
+            }
         }
 
         CommandGroup(replacing: .undoRedo) {

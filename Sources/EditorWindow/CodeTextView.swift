@@ -1,4 +1,5 @@
 import AppKit
+import EditorCore
 
 /// `NSTextView` subclass that owns the editor's smart editing behaviour.
 ///
@@ -19,8 +20,14 @@ public final class CodeTextView: NSTextView {
     public var onSelectionChange: (() -> Void)?
 
     /// Source of completion suggestions. Defaults to the built-in offline
-    /// provider; replace it to plug in a model-backed one later.
+    /// provider; the app replaces it with the clangd-backed one when available.
     public var completionProvider: CompletionProviding? = BuiltinCompletionProvider()
+
+    /// File this document corresponds to, used by semantic providers.
+    public var documentFileURL: URL?
+
+    /// Called after every edit so a semantic provider can keep its server in sync.
+    public var onDocumentSync: ((String, URL?) -> Void)?
 
     /// Whether the completion list opens automatically while typing.
     public var autoCompletionEnabled = true
@@ -156,6 +163,7 @@ public final class CodeTextView: NSTextView {
             return
         }
         apply(outcome)
+        onDocumentSync?(self.string, documentFileURL)
         maybeShowCompletions(afterTyping: typed)
     }
 
@@ -193,6 +201,17 @@ public final class CodeTextView: NSTextView {
 
     /// The word being typed at the caret, plus the context that decides which
     /// suggestions make sense.
+    /// Caret as an LSP line/character pair (line 0-based, character in UTF-16).
+    func caretLSPPosition() -> CursorPosition {
+        let ns = string as NSString
+        let location = min(selectedRange().location, ns.length)
+        let prefix = ns.substring(to: location)
+        let lines = prefix.components(separatedBy: "\n")
+        let line = max(0, lines.count - 1)
+        let character = (lines.last as NSString?)?.length ?? 0
+        return CursorPosition(line: line, character: character)
+    }
+
     private func completionPrefixAtCaret() -> (prefix: String, range: NSRange, context: CompletionContext)? {
         let selection = selectedRange()
         guard selection.length == 0 else { return nil }
@@ -212,16 +231,37 @@ public final class CodeTextView: NSTextView {
     }
 
     /// Screen-space rect of the caret, for positioning the popup.
-    private func caretScreenRect() -> NSRect {
-        guard let window, let layoutManager, let container = textContainer else { return .zero }
+    /// The caret line's rectangle in screen coordinates.
+    ///
+    /// Returns the whole line fragment (not just the caret glyph) so the popup can
+    /// be anchored below the *line*: anchoring to the caret's own rect put the list
+    /// on top of the text being typed, because text view coordinates are flipped.
+    /// Where a popup should be anchored: the caret line's rect, plus the caret's x.
+    private struct PopupAnchor {
+        let line: NSRect
+        let caretX: CGFloat
+    }
+
+    private func caretLineScreenRect() -> PopupAnchor {
+        guard let window, let layoutManager, let container = textContainer else {
+            return PopupAnchor(line: .zero, caretX: 0)
+        }
         let location = min(selectedRange().location, (string as NSString).length)
         let glyphRange = layoutManager.glyphRange(forCharacterRange: NSRange(location: location, length: 0),
                                                   actualCharacterRange: nil)
-        var rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: container)
+        let caretRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: container)
+        // The full line fragment gives the line's top/bottom, which is what we want
+        // to sit under.
+        let lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyphRange.location, effectiveRange: nil)
+        var rect = NSRect(x: caretRect.origin.x,
+                          y: lineRect.origin.y,
+                          width: max(caretRect.width, 2),
+                          height: lineRect.height)
         rect.origin.x += textContainerInset.width
         rect.origin.y += textContainerInset.height
         let inWindow = convert(rect, to: nil)
-        return window.convertToScreen(inWindow)
+        let onScreen = window.convertToScreen(inWindow)
+        return PopupAnchor(line: onScreen, caretX: onScreen.minX)
     }
 
     private func completionPanelInstance() -> CompletionPanel {
@@ -391,8 +431,11 @@ public final class CodeTextView: NSTextView {
         let panel = completionPanelInstance()
         panel.onAccept = { [weak self] item in self?.accept(item) }
         panel.onCancel = { [weak self] in self?.completionRange = nil }
+        // Give a semantic provider the exact caret before it queries.
+        (completionProvider as? SemanticCompletionProvider)?.caretPosition = caretLSPPosition()
         let displayFont = font ?? .monospacedSystemFont(ofSize: 12, weight: .regular)
-        panel.show(items: items, near: caretScreenRect(), font: displayFont)
+        let anchor = caretLineScreenRect()
+        panel.show(items: items, below: anchor.line, caretX: anchor.caretX, font: displayFont)
     }
 
     public override func cancelOperation(_ sender: Any?) {
@@ -434,6 +477,7 @@ public final class CodeTextView: NSTextView {
             return
         }
         apply(EditPlanner.apply(.deleteBackward, to: string, selection: selectedRange(), settings: editSettings))
+        onDocumentSync?(self.string, documentFileURL)
         // Deleting a character changes the prefix being completed, so the list
         // must be re-filtered (and closed once the word is gone).
         refreshCompletionsAfterDeleting()

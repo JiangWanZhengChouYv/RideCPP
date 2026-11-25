@@ -7,38 +7,46 @@ import Foundation
 /// accepted: they only mark the spots the user needs to fill in.
 public struct CompletionItem: Equatable, Sendable, Identifiable {
     public let id: String
+    /// What the row shows (a short name, without the parameter list).
     public let text: String
+    /// Signature or type, shown greyed next to the name.
     public let detail: String?
-    /// What this suggestion refers to; drives the leading badge (kw / fx / var).
+    /// What this suggestion refers to; drives the leading badge.
     public let kind: SymbolKind
+    /// Explicit text to insert when it differs from `text` (semantic results).
+    private let explicitInsertion: String?
 
     public init(id: String = UUID().uuidString,
                 text: String,
                 detail: String? = nil,
-                kind: SymbolKind = .keyword) {
+                kind: SymbolKind = .keyword,
+                explicitInsertion: String? = nil) {
         self.id = id
         self.text = text
         self.detail = detail
         self.kind = kind
+        self.explicitInsertion = explicitInsertion
     }
 
-    /// Text with placeholders and indent markers removed, which is what
-    /// accepting the item inserts (the editor re-applies indentation).
+    /// Text to insert: the explicit one when provided, otherwise the displayed text
+    /// with placeholders and indent markers removed.
     public var insertionText: String {
-        Placeholder.strip(from: text)
+        if let explicitInsertion { return explicitInsertion }
+        return Self.stripped(text)
+    }
+
+    private static func stripped(_ text: String) -> String {
+        let withoutPlaceholders = Placeholder.strip(from: text)
+        return withoutPlaceholders
             .split(separator: "\n", omittingEmptySubsequences: false)
             .map { line -> String in
-                var text = String(line)
-                while text.last == " " || text.last == "\t" { text.removeLast() }
-                return text
-            }
-            .joined(separator: "\n")
-            .split(separator: "\n", omittingEmptySubsequences: false)
-            .map { line in
+                // Drop snippet indent markers, then trailing whitespace (which a
+                // stripped placeholder leaves behind).
                 var body = String(line)
                 while body.hasPrefix(String(BuiltinCompletionProvider.indentMarker)) {
                     body.removeFirst()
                 }
+                while body.last == " " || body.last == "\t" { body.removeLast() }
                 return body
             }
             .joined(separator: "\n")
@@ -143,6 +151,13 @@ public final class BuiltinCompletionProvider: CompletionProviding {
         "#else", "#endif", "#line", "#error", "#pragma"
     ]
 
+    /// One multi-line scaffold offered as a completion.
+    public struct Snippet: Sendable, Equatable {
+        public let name: String
+        public let body: String
+        public let detail: String
+    }
+
     /// Multi-line scaffolds. Placeholders mark the parts the user fills in and
     /// are shown grey, never inserted.
     ///
@@ -150,16 +165,16 @@ public final class BuiltinCompletionProvider: CompletionProviding {
     /// replaced by the editor's own indent unit at insertion time. Hard-coding
     /// four spaces made snippets look wrong next to two-space or tab-indented
     /// files, and looked wrong next to the surrounding code.
-    public static let snippets: [(name: String, body: String, detail: String)] = [
-        ("main", "int main() {\n·⟨body⟩\n·return 0;\n}", "main function"),
-        ("for", "for (int i = 0; i < ⟨n⟩; ++i) {\n·⟨body⟩\n}", "indexed loop"),
-        ("forr", "for (const auto& ⟨item⟩ : ⟨container⟩) {\n·⟨body⟩\n}", "range-based for"),
-        ("while", "while (⟨condition⟩) {\n·⟨body⟩\n}", "while loop"),
-        ("if", "if (⟨condition⟩) {\n·⟨body⟩\n}", "if statement"),
-        ("ife", "if (⟨condition⟩) {\n·⟨body⟩\n} else {\n·⟨else body⟩\n}", "if / else"),
-        ("switch", "switch (⟨value⟩) {\ncase 0:\n·⟨body⟩\n·break;\ndefault:\n·break;\n}", "switch statement"),
-        ("vec", "⟨namespace⟩vector<int>", "vector declaration"),
-        ("class", "class ⟨Name⟩ {\npublic:\n·⟨Name⟩() = default;\n};", "class definition")
+    public static let snippets: [Snippet] = [
+        Snippet(name: "main", body: "int main() {\n·⟨body⟩\n·return 0;\n}", detail: "main function"),
+        Snippet(name: "for", body: "for (int i = 0; i < ⟨n⟩; ++i) {\n·⟨body⟩\n}", detail: "indexed loop"),
+        Snippet(name: "forr", body: "for (const auto& ⟨item⟩ : ⟨container⟩) {\n·⟨body⟩\n}", detail: "range-based for"),
+        Snippet(name: "while", body: "while (⟨condition⟩) {\n·⟨body⟩\n}", detail: "while loop"),
+        Snippet(name: "if", body: "if (⟨condition⟩) {\n·⟨body⟩\n}", detail: "if statement"),
+        Snippet(name: "ife", body: "if (⟨condition⟩) {\n·⟨body⟩\n} else {\n·⟨else body⟩\n}", detail: "if / else"),
+        Snippet(name: "switch", body: "switch (⟨value⟩) {\ncase 0:\n·⟨body⟩\n·break;\ndefault:\n·break;\n}", detail: "switch statement"),
+        Snippet(name: "vec", body: "⟨namespace⟩vector<int>", detail: "vector declaration"),
+        Snippet(name: "class", body: "class ⟨Name⟩ {\npublic:\n·⟨Name⟩() = default;\n};", detail: "class definition")
     ]
 
     /// The character that marks one level of indentation inside a snippet body.
@@ -336,8 +351,7 @@ public final class BuiltinCompletionProvider: CompletionProviding {
         var score = 0.0
 
         // Prefix quality: exact beats longer.
-        if lowered == query { score += 60 }
-        else if lowered.hasPrefix(query) { score += 30 }
+        if lowered == query { score += 60 } else if lowered.hasPrefix(query) { score += 30 }
         score -= Double(max(0, lowered.count - query.count)) * 0.6
 
         // Where the name came from: names the file already uses are the most

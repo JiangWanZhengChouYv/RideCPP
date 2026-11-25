@@ -43,6 +43,21 @@ targets:
         SKIP_INSTALL: "YES"
         DYLIB_INSTALL_NAME_BASE: "@rpath"
 
+  EditorWindow:
+    type: framework
+    platform: macOS
+    sources:
+      - path: Sources/EditorWindow
+    dependencies:
+      - target: EditorCore
+        embed: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ridecpp.EditorWindow
+        PRODUCT_NAME: EditorWindow
+        SKIP_INSTALL: "YES"
+        DYLIB_INSTALL_NAME_BASE: "@rpath"
+
   BuildKit:
     type: framework
     platform: macOS
@@ -63,6 +78,8 @@ targets:
       - path: Resources
         buildPhase: resources
     dependencies:
+      - target: EditorWindow
+        embed: true
       - target: EditorCore
         embed: true
       - target: BuildKit
@@ -109,9 +126,18 @@ targets:
       - path: Tests/EditorCoreTests
     dependencies:
       - target: EditorCore
+
+  EditorWindowTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/EditorWindowTests
+    dependencies:
+      - target: EditorWindow
+      - target: EditorCore
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.ridecpp.EditorCoreTests
+        PRODUCT_BUNDLE_IDENTIFIER: com.ridecpp.EditorWindowTests
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks @loader_path/../Frameworks"
 
   BuildKitTests:
@@ -131,6 +157,7 @@ schemes:
     build:
       targets:
         RideCPP: all
+        EditorWindow: all
         EditorCore: all
         BuildKit: all
     run:
@@ -139,6 +166,7 @@ schemes:
       config: Debug
       targets:
         - EditorCoreTests
+        - EditorWindowTests
         - BuildKitTests
   EditorCore:
     build:

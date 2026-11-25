@@ -3,6 +3,7 @@ import Combine
 import SwiftUI
 import EditorCore
 import BuildKit
+import EditorWindow
 
 /// In-process acceptance checks, run only when `RIDECPP_SELFTEST` is set.
 ///
@@ -17,18 +18,13 @@ import BuildKit
 @MainActor
 final class SelfTestRunner {
 
-    struct Check {
-        let name: String
-        var passed: Bool
-        var detail: String
-    }
-
-    private var checks: [Check] = []
+    private var report: SelfTestReport
     private let reportPath: String
     private var snapshotIndex = 0
 
     init(reportPath: String) {
         self.reportPath = reportPath
+        self.report = SelfTestReport(path: reportPath)
     }
 
     /// True while the automated self-test drives the app; the delegate uses it
@@ -45,6 +41,16 @@ final class SelfTestRunner {
     func run() async {
         let state = AppState.shared
 
+        guard let document = await checkWelcomeAndEditing(state) else { return }
+        await checkEditingAndCompletion(state, document)
+        await checkBuildRunAndInput(state, document)
+        await checkConsoleAndOutput(state, document)
+        await checkFormattingAndTabs(state, document)
+        await checkFileOpenAndSettings(state, document)
+    }
+
+    @discardableResult
+    private func checkWelcomeAndEditing(_ state: AppState) async -> DocumentModel? {
         // 1. Launch shows the welcome page (no file open), not a blank document.
         await settle()
         snapshot(named: "welcome")
@@ -71,10 +77,13 @@ final class SelfTestRunner {
         record("document-created", state.documents.count == 1,
                "documents=\(state.documents.count)")
         guard let document = state.selectedDocument else {
-            finish()
-            return
+            record("document-created", false, "no document after New File")
+            return nil
         }
+        return document
+    }
 
+    private func checkEditingAndCompletion(_ state: AppState, _ document: DocumentModel) async {
         // 2. Auto-indent through the real text view.
         let view = document.engine.textView
         view.setSelectedRange(NSRange(location: 0, length: (view.string as NSString).length))
@@ -141,6 +150,10 @@ final class SelfTestRunner {
         record("syntax-highlighting", temporary != nil,
                "colors=\(document.engine.highlighter.lastTokenCount)")
 
+    }
+
+    private func checkBuildRunAndInput(_ state: AppState, _ document: DocumentModel) async {
+        let view = document.engine.textView
         // 5b. Typing "i" opens the completion list with keywords harvested from
         //     the compiler, and the list greys out placeholders it will not insert.
         view.string = "int main() {\n    \n}\n"
@@ -186,6 +199,10 @@ final class SelfTestRunner {
 
         snapshot(named: "console-idle")
 
+    }
+
+    private func checkConsoleAndOutput(_ state: AppState, _ document: DocumentModel) async {
+        let view = document.engine.textView
         // 6. A real build + run of the current tab. Building saves first, so the
         //    compiled source is the file on disk rather than a scratch copy.
         view.string = """
@@ -277,6 +294,10 @@ final class SelfTestRunner {
                "promptFirst=\(promptedBeforeInput) second=\(sawSecondPrompt) output=\(escaped(String(interactiveOutput.suffix(300))))")
         snapshot(named: "interactive-run")
 
+    }
+
+    private func checkFormattingAndTabs(_ state: AppState, _ document: DocumentModel) async {
+        let view = document.engine.textView
         // 7a. The console palette adapts to the system appearance: dark text on a
         //     light panel in light mode, light text on a dark panel in dark mode.
         //     A fixed palette is what made text vanish in one of the two modes.
@@ -289,7 +310,9 @@ final class SelfTestRunner {
             let darkFg = paletteLuminance(ConsoleTextView.terminalText(for: darkAqua))
             let hintLight = paletteLuminance(ConsoleTextView.terminalHintText.resolved(for: aqua))
             let hintDark = paletteLuminance(ConsoleTextView.terminalHintText.resolved(for: darkAqua))
-            let paletteDescription = "light=\(String(format: "%.2f", lightBg))/fg\(String(format: "%.2f", lightFg)) dark=\(String(format: "%.2f", darkBg))/fg\(String(format: "%.2f", darkFg)) hintLight=\(String(format: "%.2f", hintLight)) hintDark=\(String(format: "%.2f", hintDark))"
+            let paletteDescription = Self.describePalette(
+                light: (lightBg, lightFg), dark: (darkBg, darkFg),
+                hints: (hintLight, hintDark))
             record("console-adapts-to-appearance",
                    consolePaletteAdaptsToAppearance(),
                    paletteDescription)
@@ -482,6 +505,10 @@ final class SelfTestRunner {
         await settle()
         snapshot(named: "problems-panel")
 
+    }
+
+    private func checkFileOpenAndSettings(_ state: AppState, _ document: DocumentModel) async {
+        let view = document.engine.textView
         // 8. Formatting the document with clang-format.
         view.string = "int  main(){int x=1;return  0;}"
         let before = view.string
@@ -530,6 +557,65 @@ final class SelfTestRunner {
         await settle()
         snapshot(named: "welcome-after-close")
 
+        // 6c3. Semantic completion via clangd: typing a member prefix must offer
+        //      the real members with their signatures.
+        let semanticDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RideCPP-semantic-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: semanticDir, withIntermediateDirectories: true)
+        let semanticFile = semanticDir.appendingPathComponent("main.cpp")
+        let semanticSource = """
+        #include <string>
+        struct Point { int x; int y; void moveTo(int a, int b); int manhattan(); };
+        int main() {
+            Point p;
+            p.manhattan();
+            std::string s;
+            s.append("x");
+            return 0;
+        }
+        """
+        try? semanticSource.write(to: semanticFile, atomically: true, encoding: .utf8)
+        // This probe opens its own file: remember the tab count so it can be
+        // restored, otherwise later checks see an extra document.
+        let documentsBefore = state.documents.count
+        state.open(urls: [semanticFile])
+        if let doc = state.selectedDocument, let provider = ClangdSession.findClangd() != nil ? doc.engine.textView.completionProvider : nil {
+            // Give clangd time to start and parse.
+            try? await Task.sleep(nanoseconds: 3_500_000_000)
+            let typed = semanticSource.replacingOccurrences(of: "s.append(\"x\");", with: "s.ap")
+            doc.engine.textView.string = typed
+            let lines = typed.components(separatedBy: "\n")
+            let lineIndex = lines.firstIndex { $0.contains("s.ap") } ?? 0
+            if let semantic = provider as? SemanticCompletionProvider {
+                semantic.syncDocument(text: typed, fileURL: doc.fileURL)
+                semantic.caretPosition = CursorPosition(line: lineIndex,
+                                                       character: (lines[lineIndex] as NSString).length)
+            }
+            // clangd answers asynchronously and its overload set arrives over a few
+            // requests; keep asking until the signature-bearing overload shows up.
+            // An overload with no parameters legitimately has no `detail`, so the
+            // check is for a *signature* somewhere in the list, not on the first item.
+            var suggestions: [CompletionItem] = []
+            var appends: [CompletionItem] = []
+            for _ in 0..<20 {
+                suggestions = provider.completionItems(forPrefix: "ap", document: typed, context: .code)
+                appends = suggestions.filter { $0.text == "append" }
+                if appends.contains(where: { !($0.detail ?? "").isEmpty }) { break }
+                for _ in 0..<20 { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+                Thread.sleep(forTimeInterval: 0.1)
+            }
+            let signatures = appends.compactMap(\.detail).filter { !$0.isEmpty }
+            record("semantic-completion-via-clangd",
+                   !appends.isEmpty && !signatures.isEmpty,
+                   "clangd=\(provider is SemanticCompletionProvider) appends=\(appends.count) signatures=\(signatures.prefix(2))")
+        } else {
+            record("semantic-completion-via-clangd", false, "clangd unavailable")
+        }
+        // Restore the tab count for the remaining checks.
+        if let opened = state.selectedDocument, state.documents.count > documentsBefore {
+            state.close(document: opened)
+        }
+
         // 12. Opening a real file must show its text inside the editor, at a
         //     non-zero size (a zero-width text container renders nothing).
         let demoPath = FileManager.default.temporaryDirectory.appendingPathComponent("ridecpp-open-test.cpp")
@@ -553,7 +639,7 @@ final class SelfTestRunner {
                innerSize.width > 200 && innerSize.height > 100 && docSize.width > 200,
                "scroll=\(Int(innerSize.width))x\(Int(innerSize.height)) doc=\(Int(docSize.width))x\(Int(docSize.height))")
         record("open-file-visible",
-                   opened.engine.textView.string.contains("int main()")
+                                                          opened.engine.textView.string.contains("int main()")
                        && frame.width > 100 && frame.height > 50
                        && containerWidth > 100,
                    "chars=\(opened.engine.textView.string.count) frame=\(frameDescription) containerWidth=\(containerDescription)")
@@ -586,7 +672,7 @@ final class SelfTestRunner {
         var builtWith: [String] = []
         var failures: [String] = []
         for compiler in candidates {
-            view.string = "int main() { return 0; }"
+            document.engine.textView.string = "int main() { return 0; }"
             SettingsStore.shared.compilerPath = compiler.path
             state.build(andRun: false)
             let done = await waitUntil(timeout: 90) { !state.isBuilding }
@@ -655,31 +741,30 @@ final class SelfTestRunner {
     }
 
     private func record(_ name: String, _ passed: Bool, _ detail: String) {
-        checks.append(Check(name: name, passed: passed, detail: detail))
-        print("[selftest] \(passed ? "PASS" : "FAIL") \(name) — \(detail)")
+        report.record(name, passed, detail)
     }
 
     private func escaped(_ text: String) -> String {
-        text.replacingOccurrences(of: "\n", with: "\\n")
-            .replacingOccurrences(of: "\"", with: "\\\"")
+        SelfTestReport.escaped(text)
     }
 
     private func finish() {
-        let passed = checks.allSatisfy(\.passed)
-        var json = "{\n  \"passed\": \(passed),\n  \"checks\": [\n"
-        json += checks.map { check in
-            "    {\"name\": \"\(check.name)\", \"passed\": \(check.passed), \"detail\": \"\(check.detail)\"}"
-        }.joined(separator: ",\n")
-        json += "\n  ]\n}\n"
-        try? json.write(toFile: reportPath, atomically: true, encoding: .utf8)
-        print("[selftest] \(passed ? "ALL CHECKS PASSED" : "SOME CHECKS FAILED") -> \(reportPath)")
+        report.finish()
         NSApp.terminate(nil)
     }
 
-
-
-
     // MARK: - Console palette checks
+
+    /// Compact one-line summary of the resolved palette, for the report.
+    private static func describePalette(light: (Double, Double),
+                                        dark: (Double, Double),
+                                        hints: (Double, Double)) -> String {
+        func pair(_ values: (Double, Double)) -> String {
+            String(format: "%.2f/fg%.2f", values.0, values.1)
+        }
+        return "light=\(pair(light)) dark=\(pair(dark)) "
+            + "hintLight=\(String(format: "%.2f", hints.0)) hintDark=\(String(format: "%.2f", hints.1))"
+    }
 
     private func paletteLuminance(_ color: NSColor) -> Double {
         guard let srgb = color.usingColorSpace(.sRGB) else { return -1 }

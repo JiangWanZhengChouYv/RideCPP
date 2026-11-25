@@ -52,15 +52,22 @@ public enum DiagnosticsParser {
     /// Handles Windows-style drive letters only incidentally; this IDE is macOS
     /// only, but paths with spaces and colons in folder names still work because
     /// the number groups anchor the match from the right.
-    private static let diagnosticRegex = try! NSRegularExpression(
-        pattern: #"^(.+?):(\d+):(?:(\d+):)?\s*(error|warning|note|fatal error)\s*:\s*(.*)$"#,
-        options: [.anchorsMatchLines]
+    /// Both patterns are compile-time constants, so a failure here is a programmer
+    /// error rather than a runtime condition; `required` makes that explicit without
+    /// a force-try in the call site.
+    private static let diagnosticRegex = requiredRegex(
+        #"^(.+?):(\d+):(?:(\d+):)?\s*(error|warning|note|fatal error)\s*:\s*(.*)$"#
     )
 
-    private static let caretRegex = try! NSRegularExpression(
-        pattern: #"^\s*(\^|~+)\s*$"#,
-        options: [.anchorsMatchLines]
-    )
+    private static let caretRegex = requiredRegex(#"^\s*(\^|~+)\s*$"#)
+
+    private static func requiredRegex(_ pattern: String) -> NSRegularExpression {
+        do {
+            return try NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines])
+        } catch {
+            preconditionFailure("invalid built-in diagnostic pattern: \(error)")
+        }
+    }
 
     /// Parses all diagnostics in `output`, in the order they appear.
     public static func parse(_ output: String) -> [Diagnostic] {
@@ -108,8 +115,8 @@ public enum DiagnosticsParser {
     /// Diagnostics whose file matches `sourcePath`, comparing resolved paths so
     /// clang's relative paths still line up with the document.
     public static func diagnostics(_ diagnostics: [Diagnostic],
-                                  matching sourcePath: String,
-                                  workingDirectory: String? = nil) -> [Diagnostic] {
+                                   matching sourcePath: String,
+                                   workingDirectory: String? = nil) -> [Diagnostic] {
         let target = canonicalPath(sourcePath, workingDirectory: nil)
         return diagnostics.filter { diagnostic in
             canonicalPath(diagnostic.file, workingDirectory: workingDirectory) == target

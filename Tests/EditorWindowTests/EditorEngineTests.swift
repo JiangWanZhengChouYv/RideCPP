@@ -1,6 +1,7 @@
 import XCTest
 import AppKit
-@testable import EditorCore
+import EditorCore
+@testable import EditorWindow
 
 @MainActor
 final class EditorEngineTests: XCTestCase {

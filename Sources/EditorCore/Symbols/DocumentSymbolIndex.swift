@@ -176,7 +176,7 @@ public final class DocumentSymbolIndex {
 
     /// Identifiers declared by one header file, cached on disk by path + mtime.
     static func symbols(inHeader path: String) -> [String] {
-        let modification = (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date) ?? nil
+        let modification = (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date)
         if let cached = loadCache(path: path, modification: modification) { return cached }
 
         guard let data = FileManager.default.contents(atPath: path),
@@ -195,9 +195,9 @@ public final class DocumentSymbolIndex {
     /// this design avoids. `bits/stdc++.h` is cheap precisely because it is read
     /// as one (large) file.
     static func collectIdentifiers(from text: String,
-                                    into names: inout Set<String>,
-                                    followingIncludesAt path: String?,
-                                    depth: Int) {
+                                   into names: inout Set<String>,
+                                   followingIncludesAt path: String?,
+                                   depth: Int) {
         let code = strippingCommentsAndLiterals(text)
         var index = code.startIndex
         while index < code.endIndex {

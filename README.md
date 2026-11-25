@@ -1,5 +1,13 @@
 # RideCPP
 
+[![CI](https://github.com/JiangWanZhengChouYv/RideCPP/actions/workflows/ci.yml/badge.svg)](https://github.com/JiangWanZhengChouYv/RideCPP/actions/workflows/ci.yml)
+[![SwiftLint](https://img.shields.io/badge/SwiftLint-0%20errors-brightgreen)](https://github.com/realm/SwiftLint)
+[![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-blue)](https://www.apple.com/macos/)
+[![Swift](https://img.shields.io/badge/Swift-5-orange)](https://swift.org)
+[![Architecture](https://img.shields.io/badge/arch-arm64%20%7C%20x86__64-lightgrey)](https://github.com/JiangWanZhengChouYv/RideCPP/releases)
+[![Release](https://img.shields.io/github/v/release/JiangWanZhengChouYv/RideCPP?label=download)](https://github.com/JiangWanZhengChouYv/RideCPP/releases/latest)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 一个轻量的 macOS 原生 C++ IDE。界面用 **SwiftUI**，编辑内核用 **AppKit `NSTextView`**，直接调用本机的 `clang++`/`g++` 编译运行，不依赖终端。
 
 A lightweight native macOS C++ IDE: **SwiftUI** for the interface, **AppKit `NSTextView`** for the editor core, compiling and running through the local `clang++`/`g++` — no terminal required.

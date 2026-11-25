@@ -1,4 +1,5 @@
 import AppKit
+import EditorCore
 
 /// Applies syntax colors to the text view.
 ///

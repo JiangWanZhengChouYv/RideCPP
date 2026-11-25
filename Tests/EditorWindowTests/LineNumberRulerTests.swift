@@ -1,6 +1,7 @@
 import XCTest
 import AppKit
-@testable import EditorCore
+import EditorCore
+@testable import EditorWindow
 
 /// Pixel-level checks for the line-number gutter.
 ///

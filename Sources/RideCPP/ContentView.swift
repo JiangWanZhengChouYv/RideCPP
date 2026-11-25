@@ -32,7 +32,7 @@ struct ContentView: View {
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
                 Divider()
             }
-            if let update = state.availableUpdate {
+            if let update = state.updates.available {
                 updateBanner(update)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -136,9 +136,9 @@ struct ContentView: View {
                 .font(.system(size: 11))
                 .lineLimit(1)
 
-            if case .downloading = state.updatePhase {
+            if case .downloading = state.updates.phase {
                 // A determinate bar, driven by bytes actually received.
-                ProgressView(value: state.updateProgress)
+                ProgressView(value: state.updates.progress)
                     .progressViewStyle(.linear)
                     .frame(width: 150)
                 Text(progressLabel)
@@ -151,9 +151,9 @@ struct ContentView: View {
 
             Spacer()
 
-            if case .downloading = state.updatePhase {
+            if case .downloading = state.updates.phase {
                 Button {
-                    state.cancelUpdateDownload()
+                    state.updates.cancel()
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 8, weight: .bold))
@@ -161,18 +161,18 @@ struct ContentView: View {
                 }
                 .buttonStyle(.plain)
                 .help(L10n.t("update.cancel"))
-            } else if case .failed = state.updatePhase {
+            } else if case .failed = state.updates.phase {
                 Button {
-                    state.updatePhase = .idle
+                    state.updates.dismiss()
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 8, weight: .bold))
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-            } else if case .idle = state.updatePhase {
+            } else if case .idle = state.updates.phase {
                 Button {
-                    state.availableUpdate = nil
+                    state.updates.dismiss()
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 8, weight: .bold))
@@ -187,7 +187,7 @@ struct ContentView: View {
     }
 
     private var bannerIcon: String {
-        switch state.updatePhase {
+        switch state.updates.phase {
         case .downloading: return "arrow.down.circle"
         case .installing, .readyToRelaunch: return "arrow.triangle.2.circlepath"
         case .failed: return "exclamationmark.triangle.fill"
@@ -196,12 +196,12 @@ struct ContentView: View {
     }
 
     private var bannerTint: Color {
-        if case .failed = state.updatePhase { return .orange }
+        if case .failed = state.updates.phase { return .orange }
         return .accentColor
     }
 
     private func bannerTitle(_ update: ReleaseInfo) -> String {
-        switch state.updatePhase {
+        switch state.updates.phase {
         case .idle:
             return L10n.t("update.available.message", update.versionLabel)
         case .downloading:
@@ -216,8 +216,8 @@ struct ContentView: View {
     }
 
     private var progressLabel: String {
-        let megabytes = Double(state.updateBytes.received) / (1024 * 1024)
-        let total = Double(state.updateBytes.total) / (1024 * 1024)
+        let megabytes = Double(state.updates.bytes.received) / (1024 * 1024)
+        let total = Double(state.updates.bytes.total) / (1024 * 1024)
         if total > 0 {
             return String(format: "%.1f / %.1f MB", megabytes, total)
         }
@@ -226,17 +226,17 @@ struct ContentView: View {
 
     @ViewBuilder
     private func bannerAction(_ update: ReleaseInfo) -> some View {
-        switch state.updatePhase {
+        switch state.updates.phase {
         case .idle:
             // One action: the update installs itself. Opening the release page was a
             // second, redundant path.
-            Button(L10n.t("update.install")) { state.installAvailableUpdate() }
+            Button(L10n.t("update.install")) { state.updates.install() }
                 .buttonStyle(.link)
                 .font(.system(size: 11))
         case .downloading, .installing, .readyToRelaunch:
             EmptyView()
         case .failed:
-            Button(L10n.t("update.retry")) { state.installAvailableUpdate() }
+            Button(L10n.t("update.retry")) { state.updates.install() }
                 .buttonStyle(.link)
                 .font(.system(size: 11))
         }

@@ -1,4 +1,5 @@
 import AppKit
+import EditorCore
 
 /// A completion list drawn by us rather than by AppKit.
 ///
@@ -46,13 +47,17 @@ final class CompletionPanel: NSPanel {
     var count: Int { items.count }
 
     /// Shows the list next to `caretScreenRect`, with `items` selectable.
-    func show(items: [CompletionItem], near caretScreenRect: NSRect, font: NSFont) {
+    /// Shows the list directly under `lineRect`, left-aligned with `caretX`.
+    ///
+    /// Anchoring below the caret *line* (rather than at the caret itself) is what
+    /// keeps the popup from covering the code being typed.
+    func show(items: [CompletionItem], below lineRect: NSRect, caretX: CGFloat, font: NSFont) {
         self.items = items
         self.font = font
         selectedIndex = 0
-        let height = min(CGFloat(items.count) * rowHeight + 4, 220)
+        let height = min(CGFloat(items.count) * rowHeight + 4, 240)
         setContentSize(NSSize(width: width, height: height))
-        setFrameOrigin(origin(below: caretScreenRect, height: height))
+        setFrameOrigin(origin(below: lineRect, caretX: caretX, height: height))
         (contentView as? CompletionListContentView)?.rebuild()
         // `orderFront` (not `orderFrontRegardless`) keeps the current key window,
         // so the editor keeps receiving the keystrokes that drive this list.
@@ -125,15 +130,24 @@ final class CompletionPanel: NSPanel {
         scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
-    private func origin(below caret: NSRect, height: CGFloat) -> NSPoint {
-        guard let screen = NSScreen.screens.first(where: { $0.frame.intersects(caret) }) ?? NSScreen.main else {
-            return NSPoint(x: caret.minX, y: caret.minY - height)
+    /// Screen origin for a popup that hangs *below* `lineRect`.
+    ///
+    /// In AppKit screen coordinates `maxY` is the top edge, so sitting under a line
+    /// means starting at `lineRect.minY - height`.
+    private func origin(below lineRect: NSRect, caretX: CGFloat, height: CGFloat) -> NSPoint {
+        guard let screen = NSScreen.screens.first(where: { $0.frame.intersects(lineRect) }) ?? NSScreen.main else {
+            return NSPoint(x: caretX, y: lineRect.minY - height - 1)
         }
-        var x = caret.minX
-        var y = caret.minY - height - 2
-        // Flip above the caret when there is no room below.
-        if y < screen.visibleFrame.minY + 4 { y = caret.maxY + 2 }
-        if x + width > screen.visibleFrame.maxX { x = screen.visibleFrame.maxX - width - 4 }
+        let gap: CGFloat = 1
+        var x = caretX
+        var y = lineRect.minY - height - gap
+        // No room below: flip above the line rather than off-screen.
+        if y < screen.visibleFrame.minY + 4 {
+            y = lineRect.maxY + gap
+        }
+        if x + width > screen.visibleFrame.maxX {
+            x = screen.visibleFrame.maxX - width - 4
+        }
         if x < screen.visibleFrame.minX { x = screen.visibleFrame.minX + 4 }
         return NSPoint(x: x, y: y)
     }
@@ -230,47 +244,58 @@ private final class CompletionTableView: NSView {
 
     /// Draws the leading badge: a small outlined box with `kw`, `fx` or `var`
     /// in its bottom-right corner, in front of the word.
-    private func drawBadge(for kind: SymbolKind, at x: CGFloat, rowRect: NSRect, selected: Bool) -> CGFloat {
-        let boxSide: CGFloat = 13
-        let box = NSRect(x: x, y: rowRect.midY - boxSide / 2 + 1, width: boxSide, height: boxSide)
-        let tint: NSColor = selected ? .white : NSColor.secondaryLabelColor
-        let path = NSBezierPath(roundedRect: box, xRadius: 3, yRadius: 3)
-        path.lineWidth = 1
-        tint.withAlphaComponent(selected ? 0.85 : 0.5).setStroke()
-        path.stroke()
-
-        // A glyph inside the box hints at the kind; the tiny label sits on the
-        // bottom-right corner so it reads as a tag rather than text.
-        let glyph: String
-        let label: String
+    /// Colour for each suggestion kind. Muted but distinct, so the list reads as
+    /// coloured at a glance without becoming noisy.
+    static func tint(for kind: SymbolKind) -> NSColor {
         switch kind {
-        case .keyword: glyph = "◇"; label = "kw"
-        case .header:  glyph = "ƒ"; label = "fx"
-        case .userDefined: glyph = "■"; label = "var"
+        case .keyword:
+            return NSColor(srgbRed: 0.62, green: 0.45, blue: 0.92, alpha: 1)   // violet
+        case .header:
+            return NSColor(srgbRed: 0.18, green: 0.62, blue: 0.90, alpha: 1)   // blue
+        case .userDefined:
+            return NSColor(srgbRed: 0.20, green: 0.72, blue: 0.45, alpha: 1)   // green
         }
-        let glyphAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 8, weight: .medium),
-            .foregroundColor: tint.withAlphaComponent(selected ? 0.9 : 0.65)
-        ]
-        let glyphSize = (glyph as NSString).size(withAttributes: glyphAttributes)
-        (glyph as NSString).draw(at: NSPoint(x: box.midX - glyphSize.width / 2,
-                                             y: box.midY - glyphSize.height / 2 + 1),
-                                 withAttributes: glyphAttributes)
+    }
 
-        // The corner label, drawn over the box's bottom-right edge.
-        let labelAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 6, weight: .semibold),
-            .foregroundColor: selected ? NSColor.white : NSColor.tertiaryLabelColor
+    /// Short letter shown inside the badge.
+    static func letter(for kind: SymbolKind) -> String {
+        switch kind {
+        case .keyword: return "k"
+        case .header: return "f"
+        case .userDefined: return "v"
+        }
+    }
+
+    /// Draws a small rounded square with a single letter, tinted by kind.
+    ///
+    /// A filled shape with one glyph stays readable at 14 pt and reads as a real
+    /// icon rather than a checkerboard of tiny labels.
+    private func drawBadge(for kind: SymbolKind, at x: CGFloat, rowRect: NSRect, selected: Bool) -> CGFloat {
+        let side: CGFloat = 14
+        let box = NSRect(x: x, y: rowRect.midY - side / 2, width: side, height: side)
+        let tint = Self.tint(for: kind)
+        // A soft fill plus a slightly darker border keeps the colour from shouting
+        // when the row is already highlighted.
+        let fill = selected ? tint.blended(withFraction: 0.15, of: .white) ?? tint : tint
+        fill.withAlphaComponent(selected ? 0.95 : 0.16).setFill()
+        NSBezierPath(roundedRect: box, xRadius: 3.5, yRadius: 3.5).fill()
+
+        if !selected {
+            tint.withAlphaComponent(0.55).setStroke()
+            let border = NSBezierPath(roundedRect: box.insetBy(dx: 0.5, dy: 0.5), xRadius: 3, yRadius: 3)
+            border.lineWidth = 0.8
+            border.stroke()
+        }
+
+        let letter = Self.letter(for: kind) as NSString
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 8.5, weight: .bold),
+            .foregroundColor: selected ? .white : tint
         ]
-        let labelSize = (label as NSString).size(withAttributes: labelAttributes)
-        let labelOrigin = NSPoint(x: box.maxX - labelSize.width + 1.5,
-                                  y: box.minY - labelSize.height + 1.5)
-        // Clear a small patch so the tag stays legible over the box outline.
-        let patch = NSRect(x: labelOrigin.x - 1, y: labelOrigin.y,
-                           width: labelSize.width + 2, height: labelSize.height)
-        (selected ? NSColor.selectedContentBackgroundColor : NSColor.windowBackgroundColor).setFill()
-        patch.fill()
-        (label as NSString).draw(at: labelOrigin, withAttributes: labelAttributes)
+        let size = letter.size(withAttributes: attributes)
+        letter.draw(at: NSPoint(x: box.midX - size.width / 2,
+                                y: box.midY - size.height / 2 + 0.5),
+                    withAttributes: attributes)
         return box.maxX
     }
 

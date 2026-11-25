@@ -1,4 +1,5 @@
 import AppKit
+import EditorCore
 
 /// Everything one editor tab needs: the text view, its scroll view, the line
 /// number gutter and the syntax highlighter.

@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import EditorCore
 import BuildKit
+import EditorWindow
 
 /// Application-wide state: open tabs, output, diagnostics and the build/run
 /// session. Single instance so menu commands can reach it.
@@ -87,7 +88,7 @@ public final class AppState: ObservableObject {
             .filter { FileManager.default.fileExists(atPath: $0.path) }
 
         // Look for a newer release in the background; failures are silent.
-        checkForUpdates()
+        updates.checkAutomatically()
 
         // Load the remembered symbol store, then keep learning from each document.
         DispatchQueue.global(qos: .utility).async {
@@ -95,6 +96,13 @@ public final class AppState: ObservableObject {
             DispatchQueue.main.async {
                 UserSymbolStore.shared.remember(declarationsIn: self.selectedDocument?.text ?? "")
             }
+        }
+
+        // Start clangd for semantic completion. It is optional: without it the
+        // built-in text-based provider keeps working.
+        DispatchQueue.main.async { [weak self] in
+            self?.configureSemanticCompletion()
+
         }
 
         // Verify the keyword set in the background (one ~25 ms compiler run, then
@@ -189,6 +197,7 @@ public final class AppState: ObservableObject {
                                              settings: settings.editSettings,
                                              fontSize: settings.fontSize,
                                              showLineNumbers: settings.showLineNumbers)
+                attachSemanticProvider(to: document)
                 documents.append(document)
                 selectedDocumentID = document.id
                 rememberRecent(url)
@@ -307,160 +316,17 @@ public final class AppState: ObservableObject {
 
     // MARK: - Updates
 
-    /// Latest release found by the update check, if it is newer than this build.
-    @Published public var availableUpdate: ReleaseInfo?
-    @Published public private(set) var isCheckingForUpdates = false
+    /// In-app update flow, owned by its own controller.
+    public lazy var updates: UpdateController = UpdateController(
+        currentVersion: { SemanticVersion.current() },
+        prepareForRelaunch: { [weak self] in self?.saveDirtyDocuments() }
+    )
 
-    /// Asks GitHub for a newer release. Silent on failure (offline is normal).
-    /// How long to wait before an automatic (non user-initiated) check repeats.
-    /// GitHub allows 60 unauthenticated API calls per hour, so an app that checks on
-    /// every launch would exhaust that; a few hours is plenty for an update.
-    private static let automaticCheckInterval: TimeInterval = 6 * 60 * 60
-    private static let lastCheckKey = "update.lastAutomaticCheck"
-
-    public func checkForUpdates(userInitiated: Bool = false) {
-        guard !isCheckingForUpdates else { return }
-        if !userInitiated {
-            let last = UserDefaults.standard.double(forKey: Self.lastCheckKey)
-            let elapsed = Date().timeIntervalSince1970 - last
-            // A clock that moved backwards (or a first run) simply checks.
-            if last > 0, elapsed >= 0, elapsed < Self.automaticCheckInterval { return }
-        }
-        isCheckingForUpdates = true
-        let current = SemanticVersion.current()
-        Task { [weak self] in
-            defer { self?.isCheckingForUpdates = false }
-            do {
-                let release = try await UpdateChecker.checkForUpdate(current: current)
-                // Record only a successful automatic check, so a failure (offline,
-                // rate limited) is retried next launch instead of being suppressed.
-                if !userInitiated {
-                    UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastCheckKey)
-                }
-                guard let self else { return }
-                if let release {
-                    self.availableUpdate = release
-                } else if userInitiated {
-                    self.presentInfo(L10n.t("update.upToDate.title"),
-                                     info: L10n.t("update.upToDate.message", current.description))
-                }
-            } catch {
-                guard userInitiated, let self else { return }
-                // Rate limiting is a normal condition, not a failure of the app: say
-                // so plainly instead of showing a raw HTTP status.
-                if let updateError = error as? UpdateChecker.UpdateError,
-                   case .rateLimited = updateError {
-                    self.presentInfo(L10n.t("update.rateLimited.title"),
-                                     info: L10n.t("update.rateLimited.message"))
-                } else {
-                    self.presentInfo(L10n.t("update.failed.title"), info: error.localizedDescription)
-                }
-            }
-        }
-    }
-
-    /// Opens the release page, where the .dmg is attached.
-    /// Opens the release page in a browser (manual fallback).
-    public func openAvailableUpdate() {
-        guard let url = availableUpdate?.htmlURL else { return }
-        NSWorkspace.shared.open(url)
-    }
-
-    // MARK: - In-app update
-
-    public enum UpdatePhase: Equatable {
-        case idle
-        case downloading
-        case installing
-        case failed(String)
-        case readyToRelaunch
-    }
-
-    @Published public var updatePhase: UpdatePhase = .idle
-    /// 0...1 while downloading.
-    @Published public var updateProgress: Double = 0
-    @Published public var updateBytes: (received: Int64, total: Int64) = (0, 0)
-    private var updateDownloader: UpdateDownloader?
-
-    /// Downloads the release disk image and installs it, then relaunches.
-    public func installAvailableUpdate() {
-        guard let release = availableUpdate else { return }
-        guard let downloadURL = release.downloadURL else {
-            // No asset to fetch: fall back to the release page.
-            openAvailableUpdate()
-            return
-        }
-        guard updatePhase != .downloading && updatePhase != .installing else { return }
-
-        updatePhase = .downloading
-        updateProgress = 0
-        updateBytes = (0, 0)
-
-        let downloader = UpdateDownloader()
-        updateDownloader = downloader
-        downloader.onProgress = { [weak self] fraction, received, total in
-            self?.updateProgress = fraction
-            self?.updateBytes = (received, total)
-        }
-        downloader.onCompletion = { [weak self] result in
-            guard let self else { return }
-            switch result {
-            case .success(let file):
-                self.installDownloadedUpdate(file)
-            case .failure(let error):
-                self.updatePhase = .failed(error.localizedDescription)
-            }
-        }
-        downloader.start(from: downloadURL)
-    }
-
-    public func cancelUpdateDownload() {
-        updateDownloader?.cancel()
-        updateDownloader = nil
-        updatePhase = .idle
-        updateProgress = 0
-    }
-
-    private func installDownloadedUpdate(_ file: URL) {
-        updatePhase = .installing
-        let destination = Bundle.main.bundleURL
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            do {
-                let staged = try UpdateInstaller.install(diskImage: file, destination: destination)
-                let script = try UpdateInstaller.scheduleRelaunch(staged: staged, destination: destination)
-                DispatchQueue.main.async {
-                    guard let self else { return }
-                    self.updatePhase = .readyToRelaunch
-                    // Quit so the helper can replace the bundle, which then reopens
-                    // the app automatically.
-                    self.persistBeforeUpdating()
-                    let launcher = Process()
-                    launcher.executableURL = URL(fileURLWithPath: "/bin/bash")
-                    launcher.arguments = [script.path]
-                    try? launcher.run()
-                    NSApp.terminate(nil)
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    self?.updatePhase = .failed(error.localizedDescription)
-                }
-            }
-        }
-    }
-
-    /// Saves open documents so nothing is lost across the relaunch.
-    private func persistBeforeUpdating() {
+    /// Saves every modified document that has a real path.
+    private func saveDirtyDocuments() {
         for document in documents where document.isDirty && document.fileURL != nil {
             _ = save(document: document)
         }
-    }
-
-    private func presentInfo(_ message: String, info: String) {
-        let alert = NSAlert()
-        alert.messageText = message
-        alert.informativeText = info
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
     }
 
     // MARK: - Undo / redo
@@ -481,6 +347,44 @@ public final class AppState: ObservableObject {
     }
 
     /// Recomputes whether Undo/Redo are available for whatever is focused.
+    /// Semantic (clangd) completion state, for settings and diagnostics.
+    @Published public var semanticCompletionReady = false
+    private var semanticProvider: SemanticCompletionProvider?
+    /// Workspace root clangd is bound to.
+    private var semanticWorkspace: URL?
+
+    /// Creates the clangd-backed provider and wires it to every open document.
+    func configureSemanticCompletion() {
+        let workspace = documents.first?.fileURL?.deletingLastPathComponent()
+            ?? FileManager.default.temporaryDirectory
+        guard let provider = SemanticCompletionProvider(workingDirectory: workspace) else {
+            semanticCompletionReady = false
+            return
+        }
+        semanticProvider = provider
+        semanticWorkspace = workspace
+        for document in documents {
+            document.engine.textView.completionProvider = provider
+            document.engine.textView.documentFileURL = document.fileURL
+            document.engine.textView.onDocumentSync = { text, url in
+                provider.syncDocument(text: text, fileURL: url)
+            }
+            provider.syncDocument(text: document.text, fileURL: document.fileURL)
+        }
+        semanticCompletionReady = provider.isSemanticReady
+    }
+
+    /// Points a newly opened document at the semantic provider as well.
+    func attachSemanticProvider(to document: DocumentModel) {
+        guard let provider = semanticProvider else { return }
+        document.engine.textView.completionProvider = provider
+        document.engine.textView.documentFileURL = document.fileURL
+        document.engine.textView.onDocumentSync = { text, url in
+            provider.syncDocument(text: text, fileURL: url)
+        }
+        provider.syncDocument(text: document.text, fileURL: document.fileURL)
+    }
+
     /// Updates the breadcrumb symbol and the Ln/Col readout.
     public func updateCaretContext(line: Int, column: Int, text: String) {
         caretPositionText = "Ln \(line), Col \(column)"

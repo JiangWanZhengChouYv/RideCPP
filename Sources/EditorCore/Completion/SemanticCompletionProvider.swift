@@ -1,0 +1,271 @@
+import Foundation
+
+/// Completion that prefers clangd's semantic results and falls back to the
+/// text-based provider.
+///
+/// Why a hybrid instead of "just use clangd":
+/// * clangd needs a moment to start and to build its preamble; the first keystrokes
+///   after opening a file would otherwise show nothing.
+/// * Some files have no usable compile flags (a scratch buffer), where clangd's
+///   suggestions can be empty.
+///
+/// The semantic path wins whenever it has anything to offer, because it knows types,
+/// members and overloads; the built-in path guarantees the list is never empty.
+///
+/// Threading: clangd is queried asynchronously. A request is fired on every query and
+/// its result is *cached* for the next keystroke, which keeps typing responsive — the
+/// UI never waits on the server.
+public final class SemanticCompletionProvider: CompletionProviding {
+
+    private let fallback: BuiltinCompletionProvider
+    private let session: ClangdSession
+    /// Most recent semantic results, keyed by document revision + prefix + position.
+    ///
+    /// The revision is part of the key because clangd answers asynchronously: a
+    /// result computed for an older revision of the file must never be served for
+    /// the current one, or a stale (often empty) list sticks forever.
+    private var cache: [String: [CompletionItem]] = [:]
+    private let lock = NSLock()
+    /// Incremented on every document change; identifies the revision results belong to.
+    private var revision = 0
+    /// The file being edited, kept in sync with clangd.
+    private var currentURI: String?
+    private var lastSyncedText: String?
+
+    public init?(fallback: BuiltinCompletionProvider = BuiltinCompletionProvider(),
+                 workingDirectory: URL) {
+        guard let session = ClangdSession(workingDirectory: workingDirectory) else { return nil }
+        self.fallback = fallback
+        self.session = session
+        self.session.start()
+    }
+
+    /// Whether clangd finished its handshake.
+    public var isSemanticReady: Bool { session.state == .ready }
+
+    // MARK: - Document sync
+
+    /// Pushes the current text to clangd. Cheap when unchanged.
+    public func syncDocument(text: String, fileURL: URL?) {
+        let url = fileURL ?? FileManager.default.temporaryDirectory
+            .appendingPathComponent("RideCPP-untitled.cpp")
+        let uri = "file://" + url.path
+        lock.lock()
+        let changed = currentURI != uri || lastSyncedText != text
+        currentURI = uri
+        lastSyncedText = text
+        lock.unlock()
+        guard changed else { return }
+        lock.lock()
+        revision &+= 1
+        lock.unlock()
+        session.openDocument(uri: uri, text: text)
+    }
+
+    // MARK: - CompletionProviding
+
+    /// Caret location (UTF-16 line/character) for the next request.
+    ///
+    /// Set by the editor before querying; clangd needs the exact position, and
+    /// guessing "end of document" gives nonsense results whenever the caret is
+    /// somewhere in the middle.
+    public var caretPosition: CursorPosition?
+
+    public func completionItems(forPrefix prefix: String,
+                                document: String,
+                                context: CompletionContext = .code) -> [CompletionItem] {
+        let lexical = fallback.completionItems(forPrefix: prefix, document: document, context: context)
+        // Preprocessor directives are lexical by nature; clangd has nothing better.
+        guard context == .code else { return lexical }
+
+        lock.lock()
+        let uri = currentURI
+        lock.unlock()
+        guard let uri else { return lexical }
+
+        // Ask clangd about the position that produced this prefix. The result is
+        // used immediately if cached, otherwise the lexical list is shown and the
+        // semantic result will be ready for the next keystroke.
+        let position = caretPosition ?? Self.position(ofPrefix: prefix, in: document)
+        lock.lock()
+        let requestRevision = revision
+        let key = "\(requestRevision)|\(prefix)@\(position.line):\(position.character)"
+        let cached = cache[key]
+        lock.unlock()
+
+        session.requestCompletions(uri: uri, line: position.line, character: position.character) { [weak self] lspItems in
+            guard let self else { return }
+            let converted = lspItems.map { self.item(from: $0, prefix: prefix) }
+            guard !converted.isEmpty else { return }
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            // Drop the answer if the document moved on while clangd was thinking.
+            guard requestRevision == self.revision else { return }
+            self.cache[key] = converted
+            // Keep the cache tiny: only the most recent handful of prefixes matter.
+            if self.cache.count > 24 { self.cache.removeAll() }
+        }
+
+        if let cached, !cached.isEmpty {
+            // Semantic results first; lexical fills the tail so members and locals
+            // from the current scope are still present.
+            var merged = cached
+            var seen = Set(merged.map(\.insertionText))
+            for candidate in lexical where !seen.contains(candidate.insertionText) {
+                merged.append(candidate)
+                seen.insert(candidate.insertionText)
+            }
+            return Array(merged.prefix(40))
+        }
+        return lexical
+    }
+
+    /// Converts one clangd item into our model, doing the small cleanups the UI
+    /// needs (snippet placeholders, trailing punctuation in labels).
+    private func item(from lsp: LSPCompletionItem, prefix: String) -> CompletionItem {
+        // clangd sends snippets like `append(${1:str})`. Keep them as placeholders so
+        // the list can grey the parts the user has to fill in and only insert code.
+        let insertion = Self.convertSnippet(lsp.insertText.trimmingCharacters(in: .whitespaces))
+
+        // The row shows the bare name; the signature goes in `detail` so the list
+        // stays scannable. clangd puts the full signature in `label` and the return
+        // type in `detail`, so both are needed.
+        let name = Self.name(from: lsp.label)
+        let params = Self.signature(from: lsp.label)
+        // Show "returnType params" when the server gives both, so overloads stay
+        // distinguishable without repeating the name.
+        let returnType = lsp.detail ?? ""
+        let detail: String?
+        if !params.isEmpty, !returnType.isEmpty, returnType != params {
+            detail = "\(returnType) \(params)"
+        } else if !params.isEmpty {
+            detail = params
+        } else {
+            detail = returnType.isEmpty ? nil : returnType
+        }
+        return .semantic(text: name.isEmpty ? lsp.label : name,
+                         detail: detail,
+                         kind: Self.kind(fromLSP: lsp.kindCode),
+                         insertion: insertion)
+    }
+
+    /// The bare identifier at the start of a clangd label.
+    static func name(from label: String) -> String {
+        var result = ""
+        for character in label.trimmingCharacters(in: .whitespaces) {
+            if character.isLetter || character.isNumber || character == "_" || character == "~" {
+                result.append(character)
+            } else {
+                break
+            }
+        }
+        return result
+    }
+
+    /// The parameter list from a label like `append(const string &str)`.
+    static func signature(from label: String) -> String {
+        guard let open = label.firstIndex(of: "(") else { return "" }
+        // Include the return type that clangd sometimes appends after "->".
+        return String(label[open...])
+    }
+
+    /// Maps LSP completion kinds to our three badge kinds.
+    static func kind(fromLSP code: Int) -> SymbolKind {
+        switch code {
+        case 2, 3:            // Method, Function
+            return .header
+        case 5, 10, 22, 23:   // Field, Property, Struct, Event
+            return .userDefined
+        case 6, 9, 12, 13, 20, 21:  // Variable, Enum, Value, EnumMember, Key, Constant
+            return .userDefined
+        case 7, 8:            // Class, Interface
+            return .header
+        case 14:              // Keyword
+            return .keyword
+        default:
+            return .header
+        }
+    }
+
+    /// Turns LSP snippet syntax into our `⟨placeholder⟩` marker.
+    static func convertSnippet(_ text: String) -> String {
+        guard text.contains("${") || text.contains("$0") else { return text }
+        var result = ""
+        var index = text.startIndex
+        while index < text.endIndex {
+            let character = text[index]
+            if character == "$", text.index(after: index) < text.endIndex,
+               text[text.index(after: index)] == "{" {
+                // ${1:name} or ${1|a,b|}
+                var cursor = text.index(index, offsetBy: 2)
+                var number = ""
+                while cursor < text.endIndex, text[cursor].isNumber {
+                    number.append(text[cursor])
+                    cursor = text.index(after: cursor)
+                }
+                if cursor < text.endIndex, text[cursor] == ":" {
+                    cursor = text.index(after: cursor)
+                    var placeholder = ""
+                    var depth = 1
+                    while cursor < text.endIndex {
+                        let c = text[cursor]
+                        if c == "}" {
+                            depth -= 1
+                            if depth == 0 { break }
+                        }
+                        placeholder.append(c)
+                        cursor = text.index(after: cursor)
+                    }
+                    if !placeholder.isEmpty { result += "⟨\(placeholder)⟩" }
+                    index = cursor < text.endIndex ? text.index(after: cursor) : text.endIndex
+                    continue
+                }
+                index = text.index(index, offsetBy: 2)
+                continue
+            }
+            result.append(character)
+            index = text.index(after: index)
+        }
+        return result
+    }
+
+    /// Converts a character offset into an LSP line/character position.
+    static func position(ofPrefix prefix: String, in document: String) -> CursorPosition {
+        let target = document.count
+        // Find the last occurrence of the prefix at the end of the document, which is
+        // where the caret is while typing.
+        let ns = document as NSString
+        let caret = ns.length
+        let tail = ns.substring(to: caret)
+        let lines = tail.components(separatedBy: "\n")
+        let line = max(0, lines.count - 1)
+        let character = (lines.last as NSString?)?.length ?? 0
+        _ = target
+        return CursorPosition(line: line, character: character)
+    }
+}
+
+extension CompletionItem {
+    /// Convenience for the semantic provider: display text and inserted text differ.
+    static func semantic(text: String, detail: String?, kind: SymbolKind, insertion: String) -> CompletionItem {
+        CompletionItem(id: "lsp:\(text):\(insertion.hashValue)",
+                       text: text,
+                       detail: detail,
+                       kind: kind,
+                       explicitInsertion: insertion)
+    }
+}
+
+/// A caret position in LSP terms: 0-based line, UTF-16 character offset.
+///
+/// A named type instead of a tuple so call sites read `position.line` and stay
+/// self-documenting.
+public struct CursorPosition: Sendable, Equatable {
+    public let line: Int
+    public let character: Int
+
+    public init(line: Int, character: Int) {
+        self.line = line
+        self.character = character
+    }
+}

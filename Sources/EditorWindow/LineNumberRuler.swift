@@ -1,4 +1,5 @@
 import AppKit
+import EditorCore
 
 /// Line-number gutter drawn as an `NSRulerView` next to the text view.
 ///
