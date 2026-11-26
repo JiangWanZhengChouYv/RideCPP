@@ -26,11 +26,16 @@ final class CompletionPanel: NSPanel {
                    backing: .buffered,
                    defer: false)
         isFloatingPanel = true
-        level = .popUpMenu
+        // `.popUpMenu` sits above *every* other application's windows, so the list
+        // kept hovering over whatever the user switched to. A floating level only
+        // orders it above its own app's windows, which is all a completion popup
+        // needs.
+        level = .floating
         hasShadow = true
         isOpaque = false
         backgroundColor = .clear
-        hidesOnDeactivate = false
+        // Follow the app: switching away must take the popup with it.
+        hidesOnDeactivate = true
         // The editor must keep keyboard focus: the panel is a passive list, so
         // arrow keys and Return reach the text view and it drives the selection.
         becomesKeyOnlyIfNeeded = true

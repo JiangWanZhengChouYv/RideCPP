@@ -438,6 +438,14 @@ public final class AppState: ObservableObject {
                 document.engine.textView.showHover(text, at: offset)
             }
         }
+        // The fix button inside the hover panel.
+        document.engine.textView.onHoverAction = { [weak self, weak document] action in
+            guard let self, let document else { return }
+            switch action {
+            case .fix(let target):
+                self.applyFix(for: target, in: document)
+            }
+        }
     }
 
     /// Jumps to the definition of the symbol at the caret (⌘-click or a shortcut).
@@ -1074,6 +1082,29 @@ public func fixDiagnosticAtCaret() {
     // what `textDocument/codeAction` expects in its context.
     guard let diagnostic = liveDiagnostics.first(where: {
         Self.characterRange(for: $0.range, in: document.text as NSString) == inline.range
+    }) else {
+        statusText = L10n.t("status.noFixHere")
+        return
+    }
+    provider.codeActions(for: diagnostic, in: document.text,
+                         fileURL: document.semanticURL) { [weak self] actions in
+        guard let self else { return }
+        guard let action = actions.first(where: \.isPreferred) ?? actions.first else {
+            self.statusText = L10n.t("status.noFixAvailable")
+            return
+        }
+        self.apply(codeAction: action, to: document)
+    }
+}
+
+/// Applies clangd's preferred fix for a diagnostic the user clicked on.
+///
+/// Unlike `fixDiagnosticAtCaret` this is driven by the hovered range, so the
+/// caret does not have to be on the problem.
+func applyFix(for target: CodeTextView.DiagnosticFixTarget, in document: DocumentModel) {
+    guard let provider = semanticProvider else { return }
+    guard let diagnostic = liveDiagnostics.first(where: {
+        Self.characterRange(for: $0.range, in: document.text as NSString) == target.range
     }) else {
         statusText = L10n.t("status.noFixHere")
         return
