@@ -152,27 +152,39 @@ struct OutputPanel: View {
 
     private var problemsView: some View {
         Group {
-            if state.diagnostics.isEmpty {
+            if state.allProblems.isEmpty {
                 Text(L10n.t("output.problems.empty"))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List(state.diagnostics) { diagnostic in
+                List(state.allProblems) { problem in
                     Button {
-                        state.reveal(diagnostic: diagnostic)
+                        state.reveal(problem: problem)
                     } label: {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Image(systemName: icon(for: diagnostic.severity))
-                                .foregroundStyle(color(for: diagnostic.severity))
+                            Image(systemName: icon(for: problem.severity))
+                                .foregroundStyle(color(for: problem.severity))
                                 .font(.system(size: 10))
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(diagnostic.message)
+                                Text(problem.message)
                                     .font(.system(size: 11))
                                     .lineLimit(2)
-                                Text("\(shortPath(diagnostic.file)):\(diagnostic.line)")
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .foregroundStyle(.secondary)
+                                HStack(spacing: 6) {
+                                    Text(location(for: problem))
+                                        .font(.system(size: 10, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                    // Which pass produced it: the compiler only
+                                    // speaks after a build, clangd while typing.
+                                    Text(problem.source.label)
+                                        .font(.system(size: 9))
+                                        .foregroundStyle(.tertiary)
+                                    if let code = problem.code {
+                                        Text(code)
+                                            .font(.system(size: 9, design: .monospaced))
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                }
                             }
                             Spacer()
                         }
@@ -183,6 +195,13 @@ struct OutputPanel: View {
                 .listStyle(.plain)
             }
         }
+    }
+
+    private func location(for problem: AppState.ProblemItem) -> String {
+        // A clangd problem always belongs to the focused file, so the path adds
+        // nothing; it is shown for compiler problems, which name their own file.
+        guard problem.source == .compiler else { return "Ln \(problem.line), Col \(problem.column)" }
+        return "\(shortPath(problem.file)):\(problem.line)"
     }
 
     private func shortPath(_ path: String) -> String {

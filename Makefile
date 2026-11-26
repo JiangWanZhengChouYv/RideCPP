@@ -153,7 +153,7 @@ test: $(PROJECT)
 	@mkdir -p $(BUILD_DIR)/ModuleCache
 	xcodebuild build-for-testing $(XCODEBUILD_FLAGS) -quiet
 	@set -e; \
-	for bundle in EditorCoreTests BuildKitTests; do \
+	for bundle in EditorCoreTests EditorWindowTests BuildKitTests; do \
 		echo "=== $$bundle ==="; \
 		xcrun xctest "$(PRODUCTS)/$$bundle.xctest"; \
 	done

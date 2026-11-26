@@ -105,6 +105,9 @@ struct AppCommands: Commands {
             Button(L10n.t("edit.goToDefinition")) { state.goToDefinition() }
                 .keyboardShortcut("d", modifiers: [.command])
                 .disabled(!state.semanticCompletionReady)
+            Button(L10n.t("edit.fixDiagnostic")) { state.fixDiagnosticAtCaret() }
+                .keyboardShortcut(".", modifiers: [.command, .option])
+                .disabled(!state.semanticCompletionReady || !state.canFixDiagnostic)
             Button(L10n.t("edit.complete")) { NSApp.sendAction(#selector(CodeTextView.showCompletions(_:)), to: nil, from: nil) }
                 .keyboardShortcut(" ", modifiers: .control)
                 .keyboardShortcut("r")

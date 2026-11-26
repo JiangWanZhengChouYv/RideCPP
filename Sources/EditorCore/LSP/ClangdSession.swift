@@ -26,11 +26,17 @@ public final class ClangdSession {
 
     /// Called on the main queue whenever `state` changes.
     public var onStateChange: ((State) -> Void)?
-    /// Diagnostics pushed by the server for a file, keyed by URI.
+    /// Diagnostics pushed by the server for a file.
     ///
     /// clangd publishes these after every parse (debounced internally), which is
     /// what makes live error checking possible without compiling.
-    public var onDiagnostics: ((String, [LSPDiagnostic]) -> Void)? {
+    ///
+    /// The third argument is the document text the diagnostics were computed from.
+    /// clangd echoes the `version` it analysed, so the text can be looked up exactly
+    /// instead of assuming it is the same as the current buffer — while the user
+    /// types, the two differ by an edit or more, and placing the ranges against the
+    /// newer text is what makes a squiggle land on the wrong token.
+    public var onDiagnostics: ((String, [LSPDiagnostic], String) -> Void)? {
         didSet {
             // Replay the most recent result: a subscriber set after the first
             // publish (common: the editor attaches after the server starts) must
@@ -40,14 +46,19 @@ public final class ClangdSession {
             lock.unlock()
             if let snapshot {
                 DispatchQueue.main.async { [weak self] in
-                    self?.onDiagnostics?(snapshot.uri, snapshot.items)
+                    self?.onDiagnostics?(snapshot.uri, snapshot.items, snapshot.text)
                 }
             }
         }
     }
 
     /// Last diagnostics per URI, kept for late subscribers.
-    private var latestDiagnostics: (uri: String, items: [LSPDiagnostic])?
+    private var latestDiagnostics: (uri: String, items: [LSPDiagnostic], text: String)?
+
+    /// Text of each version sent to the server, so a publish can be matched to the
+    /// exact bytes it describes. Bounded: only the last few versions can still be
+    /// in flight, and keeping them forever would leak a copy of every document.
+    private var versionedTexts: [String: [Int: String]] = [:]
 
     public private(set) var state: State = .stopped {
         didSet {
@@ -82,10 +93,25 @@ public final class ClangdSession {
         public var errorDescription: String? { message }
     }
 
-    public init?(workingDirectory: URL) {
+    /// Language standard handed to clangd as its fallback.
+    ///
+    /// clangd guesses C++14 when no compile flags are known, so every C++17
+    /// construct (`auto [a, b] = …`, `std::optional`, structured bindings) was
+    /// reported as an error on code that compiles perfectly. The editor builds
+    /// with `-std=c++17`, so diagnostics must use the same language.
+    private let standard: String
+    /// Extra fallback flags (include paths) handed to clangd.
+    private let fallbackFlags: [String]
+
+    public init?(workingDirectory: URL, standard: String = "c++17",
+                 extraIncludePaths: [String] = []) {
         guard let found = ClangdSession.findClangd() else { return nil }
         self.executable = found
         self.workingDirectory = workingDirectory
+        self.standard = standard
+        var flags = ["-std=\(standard)"]
+        flags.append(contentsOf: extraIncludePaths.flatMap { ["-I", $0] })
+        self.fallbackFlags = flags
     }
 
     /// Locates a `clangd` binary: PATH first, then the Xcode toolchain.
@@ -103,6 +129,89 @@ public final class ClangdSession {
         }
         return nil
     }
+
+    /// Writes a `bits/stdc++.h` shim and returns the directory holding it.
+    ///
+    /// `<bits/stdc++.h>` is a GCC convenience header that Apple's toolchain does
+    /// not ship. Almost every competitive-programming template starts with it, and
+    /// without a replacement clangd reports *every* use of `std` as undeclared —
+    /// the single loudest source of false errors. The shim is generated (not
+    /// bundled) so it is also available in tests and self-test runs.
+    ///
+    /// Returns `nil` when the directory cannot be written, in which case clangd
+    /// simply keeps its normal behaviour.
+    public static func prepareCompatibilityHeaders(
+        in base: URL = FileManager.default.temporaryDirectory
+    ) -> String? {
+        let root = base.appendingPathComponent("RideCPP-clangd-include", isDirectory: true)
+        let bits = root.appendingPathComponent("bits", isDirectory: true)
+        let header = bits.appendingPathComponent("stdc++.h")
+        do {
+            try FileManager.default.createDirectory(at: bits, withIntermediateDirectories: true)
+            try compatibilityHeader.write(to: header, atomically: true, encoding: .utf8)
+            return root.path
+        } catch {
+            return nil
+        }
+    }
+
+    /// Contents of the generated `bits/stdc++.h`.
+    ///
+    /// Only standard headers are listed, so this compiles against libc++ exactly
+    /// like the GCC header does against libstdc++.
+    static let compatibilityHeader = """
+    // Generated by RideCPP. Stands in for GCC's <bits/stdc++.h>, which the
+    // Apple toolchain does not ship. Only standard headers are included.
+    #pragma once
+    #include <algorithm>
+    #include <array>
+    #include <bitset>
+    #include <cassert>
+    #include <cctype>
+    #include <cerrno>
+    #include <cfloat>
+    #include <climits>
+    #include <cmath>
+    #include <complex>
+    #include <cstdarg>
+    #include <cstddef>
+    #include <cstdint>
+    #include <cstdio>
+    #include <cstdlib>
+    #include <cstring>
+    #include <ctime>
+    #include <deque>
+    #include <exception>
+    #include <fstream>
+    #include <functional>
+    #include <iomanip>
+    #include <ios>
+    #include <iosfwd>
+    #include <iostream>
+    #include <istream>
+    #include <iterator>
+    #include <limits>
+    #include <list>
+    #include <map>
+    #include <memory>
+    #include <numeric>
+    #include <ostream>
+    #include <queue>
+    #include <set>
+    #include <sstream>
+    #include <stack>
+    #include <stdexcept>
+    #include <streambuf>
+    #include <string>
+    #include <tuple>
+    #include <type_traits>
+    #include <unordered_map>
+    #include <unordered_set>
+    #include <utility>
+    #include <valarray>
+    #include <vector>
+
+    """
 
     // MARK: - Lifecycle
 
@@ -164,9 +273,26 @@ public final class ClangdSession {
                             "documentationFormat": ["plaintext"]
                         ]
                     ],
-                    "synchronization": ["didSave": false]
+                    "synchronization": ["didSave": false],
+                    "publishDiagnostics": ["versionSupport": true],
+                    // Without this clangd answers code-action requests in the old
+                    // `Command` form (`clangd.applyFix` carrying the edit in its
+                    // arguments) instead of returning an `edit`, so the client
+                    // sees actions it cannot apply. Declaring literal support is
+                    // what makes quick fixes usable.
+                    "codeAction": [
+                        "codeActionLiteralSupport": [
+                            "codeActionKind": [
+                                "valueSet": ["quickfix", "refactor", "source"]
+                            ]
+                        ]
+                    ]
                 ]
-            ]
+            ],
+            // Without these clangd falls back to C++14 and to a bare include path,
+            // which makes valid code look broken: C++17 syntax is rejected and
+            // `bits/stdc++.h` (absent from Apple's toolchain) is not found.
+            "initializationOptions": ["fallbackFlags": fallbackFlags]
         ]) { [weak self] result in
             guard let self else { return }
             switch result {
@@ -213,13 +339,16 @@ public final class ClangdSession {
             }
             if self.openDocuments.contains(uri) {
                 self.versions[uri, default: 1] += 1
+                let version = self.versions[uri] ?? 1
+                self.remember(text: text, uri: uri, version: version)
                 self.sendNotification(method: "textDocument/didChange", params: [
-                    "textDocument": ["uri": uri, "version": self.versions[uri] ?? 1],
+                    "textDocument": ["uri": uri, "version": version],
                     "contentChanges": [["text": text]]
                 ])
             } else {
                 self.openDocuments.insert(uri)
                 self.versions[uri] = 1
+                self.remember(text: text, uri: uri, version: 1)
                 self.sendNotification(method: "textDocument/didOpen", params: [
                     "textDocument": ["uri": uri,
                                      "languageId": languageID,
@@ -228,6 +357,32 @@ public final class ClangdSession {
                 ])
             }
         }
+    }
+
+    /// Records the text of one document version, dropping versions that can no
+    /// longer be in flight.
+    private func remember(text: String, uri: String, version: Int) {
+        var history = versionedTexts[uri] ?? [:]
+        history[version] = text
+        // clangd answers the newest version it has parsed; older ones only matter
+        // while a publish is still in transit. Four is comfortably more than the
+        // debounce window, and keeps memory bounded to a few copies per file.
+        if history.count > 4 {
+            for key in history.keys.sorted().dropLast(4) {
+                history.removeValue(forKey: key)
+            }
+        }
+        versionedTexts[uri] = history
+    }
+
+    /// The text a `publishDiagnostics` refers to.
+    ///
+    /// Prefers the exact version clangd reports. When the field is absent (an
+    /// older server) the newest recorded text is the best available guess.
+    private func text(for uri: String, version: Int?) -> String? {
+        guard let history = versionedTexts[uri] else { return nil }
+        if let version, let exact = history[version] { return exact }
+        return history[history.keys.max() ?? 0]
     }
 
     // MARK: - Completion
@@ -423,11 +578,15 @@ public final class ClangdSession {
             guard let uri = params["uri"] as? String,
                   let raw = params["diagnostics"] as? [[String: Any]] else { return }
             let diagnostics = raw.compactMap(LSPDiagnostic.init(json:))
+            // Match the publish to the exact text it describes. clangd echoes the
+            // version it parsed; without it a squiggle drawn on a newer buffer
+            // lands on whatever token happens to occupy those offsets now.
+            let text = text(for: uri, version: params["version"] as? Int) ?? ""
             lock.lock()
-            latestDiagnostics = (uri, diagnostics)
+            latestDiagnostics = (uri, diagnostics, text)
             let handler = onDiagnostics
             lock.unlock()
-            DispatchQueue.main.async { handler?(uri, diagnostics) }
+            DispatchQueue.main.async { handler?(uri, diagnostics, text) }
         default:
             // `window/logMessage`, `telemetry/event`, … are intentionally ignored.
             break
@@ -517,26 +676,32 @@ public final class ClangdSession {
     /// Builds a code action, keeping the first workspace edit it carries.
     static func codeAction(from json: [String: Any]) -> LSPCodeAction? {
         guard let title = json["title"] as? String else { return nil }
+        let kind = json["kind"] as? String
+        let preferred = json["isPreferred"] as? Bool ?? false
         guard let edit = json["edit"] as? [String: Any] else {
-            return LSPCodeAction(title: title, newText: nil, range: nil)
+            return LSPCodeAction(title: title, newText: nil, range: nil,
+                                 kind: kind, isPreferred: preferred)
         }
         // Either a WorkspaceEdit with `changes`, or a documentChanges array.
         if let changes = edit["changes"] as? [String: [[String: Any]]],
            let first = changes.values.first?.first,
            let newText = first["newText"] as? String {
-            return LSPCodeAction(title: title, newText: newText, range: range(from: first["range"]))
+            return LSPCodeAction(title: title, newText: newText,
+                                 range: range(from: first["range"]),
+                                 kind: kind, isPreferred: preferred)
         }
         if let documentChanges = edit["documentChanges"] as? [[String: Any]],
            let first = documentChanges.first,
            let edits = first["edits"] as? [[String: Any]],
            let edit0 = edits.first,
            let newText = edit0["newText"] as? String {
-            return LSPCodeAction(title: title, newText: newText, range: range(from: edit0["range"]))
+            return LSPCodeAction(title: title, newText: newText,
+                                 range: range(from: edit0["range"]),
+                                 kind: kind, isPreferred: preferred)
         }
-        return LSPCodeAction(title: title, newText: nil, range: nil)
+        return LSPCodeAction(title: title, newText: nil, range: nil,
+                             kind: kind, isPreferred: preferred)
     }
-
-
 }
 
 /// One completion entry as returned by clangd.
@@ -672,16 +837,30 @@ public struct LSPDiagnostic: Sendable, Equatable {
 }
 
 /// A quick fix the server can apply.
+///
+/// Only actions that carry a concrete, applicable edit are exposed: clangd also
+/// returns refactorings that are *commands* (`clangd.applyTweak`) rather than
+/// edits, and offering those in a menu would give the user items that do nothing.
 public struct LSPCodeAction: Sendable, Equatable {
     public let title: String
     public let newText: String?
     public let range: LSPRange?
+    /// `quickfix`, `refactor`, … — clangd only marks genuine fixes as `quickfix`.
+    public let kind: String?
+    /// True for the fix clangd recommends when several are offered.
+    public let isPreferred: Bool
 
-    public init(title: String, newText: String?, range: LSPRange?) {
+    public init(title: String, newText: String?, range: LSPRange?,
+                kind: String? = nil, isPreferred: Bool = false) {
         self.title = title
         self.newText = newText
         self.range = range
+        self.kind = kind
+        self.isPreferred = isPreferred
     }
+
+    /// Whether this action can actually be applied to the buffer.
+    public var isApplicable: Bool { newText != nil && range != nil }
 }
 
 /// A location the server can navigate to.

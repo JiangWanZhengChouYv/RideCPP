@@ -74,6 +74,10 @@ public final class EditorEngine {
 
     @objc private func textStorageDidChange(_ notification: Notification) {
         textDidChange()
+        // Push the new text to the semantic server here rather than from the
+        // keyboard handlers: this notification fires for *every* edit, including
+        // paste, undo and programmatic replacement, which the keyboard paths miss.
+        textView.notifyDocumentChanged()
     }
 
     private func textDidChange() {

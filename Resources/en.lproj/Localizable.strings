@@ -183,3 +183,6 @@
 "update.rateLimited.title" = "Checked too often";
 "update.rateLimited.message" = "GitHub limits update checks to 60 per hour. Please try again later — RideCPP itself is working normally.";
 "edit.goToDefinition" = "Go to Definition";
+"edit.fixDiagnostic" = "Fix Issue";
+"status.noFixHere" = "Place the cursor on a highlighted problem first";
+"status.noFixAvailable" = "clangd has no automatic fix for this problem";

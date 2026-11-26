@@ -26,12 +26,38 @@ public final class CodeTextView: NSTextView {
     /// File this document corresponds to, used by semantic providers.
     public var documentFileURL: URL?
 
+    /// Set while the view applies one of its own edits, so the sync that follows
+    /// does not recurse.
+    private var isApplyingInternalEdit = false
+
+    /// Called whenever the text changed, whatever caused it.
+    ///
+    /// This is the single hook AppKit gives for every kind of edit — typing,
+    /// deleting, pasting, undo, drag-and-drop and programmatic replacement — so it
+    /// is where the document must be pushed to clangd. Syncing only from the
+    /// keyboard paths left the server analysing stale text, which showed up as
+    /// errors on correct code.
+    public override func didChangeText() {
+        super.didChangeText()
+    }
+
+    /// Tells the listener that the text changed.
+    ///
+    /// Called from the engine's `NSText.didChangeNotification` handler, which is
+    /// the one place AppKit reports *every* edit — typing, deleting, pasting,
+    /// undo, drag-and-drop and programmatic replacement alike.
+    func notifyDocumentChanged() {
+        onDocumentSync?(self.string, documentFileURL)
+    }
+
     /// Asks for a hover query at a character offset (set by the app).
     public var onHoverQuery: ((Int) -> Void)?
     /// Called after every edit so a semantic provider can keep its server in sync.
     public var onDocumentSync: ((String, URL?) -> Void)?
     /// Inline diagnostics currently drawn.
     private var diagnostics: [InlineDiagnostic] = []
+    /// Read-only view of the current underlines, for tests and diagnostics panels.
+    public var diagnosticsForTesting: [InlineDiagnostic] { diagnostics }
     /// Floating hover hint, if one is visible.
     private var hoverPanel: NSPanel?
 
@@ -169,7 +195,6 @@ public final class CodeTextView: NSTextView {
             return
         }
         apply(outcome)
-        onDocumentSync?(self.string, documentFileURL)
         maybeShowCompletions(afterTyping: typed)
     }
 
@@ -483,7 +508,6 @@ public final class CodeTextView: NSTextView {
             return
         }
         apply(EditPlanner.apply(.deleteBackward, to: string, selection: selectedRange(), settings: editSettings))
-        onDocumentSync?(self.string, documentFileURL)
         // Deleting a character changes the prefix being completed, so the list
         // must be re-filtered (and closed once the word is gone).
         refreshCompletionsAfterDeleting()
@@ -571,11 +595,22 @@ public final class CodeTextView: NSTextView {
         public let range: NSRange
         public let kind: Kind
         public let message: String
+        /// Server error code (clangd's `code`, e.g. `no_member`), shown with the
+        /// message so it can be searched for.
+        public let code: String?
 
-        public init(range: NSRange, kind: Kind, message: String) {
+        public init(range: NSRange, kind: Kind, message: String, code: String? = nil) {
             self.range = range
             self.kind = kind
             self.message = message
+            self.code = code
+        }
+
+        /// One-line description for the hover panel: severity, message, code.
+        public var hoverText: String {
+            let severity = kind == .error ? "error" : "warning"
+            guard let code, !code.isEmpty else { return "\(severity): \(message)" }
+            return "\(severity): \(message) [\(code)]"
         }
     }
 
@@ -595,6 +630,12 @@ public final class CodeTextView: NSTextView {
         guard let onHoverQuery else { return }
         let point = convert(event.locationInWindow, from: nil)
         guard let index = characterIndex(at: point) else { return }
+        // Over a squiggle the diagnostic is the answer; asking clangd would only
+        // add latency and, on code that does not parse, return nothing useful.
+        if let diagnostic = diagnostic(at: index) {
+            showHover(diagnostic.hoverText, at: index, kind: diagnostic.kind)
+            return
+        }
         onHoverQuery(index)
     }
 
@@ -609,7 +650,11 @@ public final class CodeTextView: NSTextView {
     }
 
     /// Shows a floating hint near a character offset (hover documentation).
-    public func showHover(_ text: String, at character: Int) {
+    ///
+    /// `kind` tints the panel's border so a hovered squiggle reads as an error or
+    /// a warning at a glance, without having to parse the text.
+    public func showHover(_ text: String, at character: Int,
+                          kind: InlineDiagnostic.Kind? = nil) {
         hideHover()
         guard !text.isEmpty else { return }
         let ns = string as NSString
@@ -653,6 +698,12 @@ public final class CodeTextView: NSTextView {
         }
         panel.orderFront(nil)
         hoverPanel = panel
+        if let kind {
+            panel.contentView?.wantsLayer = true
+            panel.contentView?.layer?.borderWidth = 1
+            panel.contentView?.layer?.borderColor =
+                (kind == .error ? EditorTheme.errorUnderline : EditorTheme.warningUnderline).cgColor
+        }
     }
 
     /// Closes the hover hint.

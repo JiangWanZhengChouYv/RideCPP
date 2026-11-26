@@ -57,6 +57,18 @@ public final class DocumentModel: ObservableObject, Identifiable {
 
     public var text: String { engine.textView.string }
 
+    /// Identity handed to clangd.
+    ///
+    /// An unsaved tab has no path, so it needs a stable stand-in: without one its
+    /// diagnostics arrive under a URL no document matches and are silently dropped,
+    /// which made every "Untitled" tab — the normal way to start an algorithm
+    /// problem — show no squiggles at all.
+    public var semanticURL: URL {
+        if let fileURL { return fileURL }
+        return FileManager.default.temporaryDirectory
+            .appendingPathComponent("RideCPP-untitled-\(id.uuidString).cpp")
+    }
+
     /// Recomputes the caret's line and column from the text view.
     public func updateCaretPosition() {
         let location = engine.textView.selectedRange().location

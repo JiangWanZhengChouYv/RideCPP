@@ -143,6 +143,10 @@ public final class AppState: ObservableObject {
                                      settings: settings.editSettings,
                                      fontSize: settings.fontSize,
                                      showLineNumbers: settings.showLineNumbers)
+        // A new tab needs the semantic wiring as much as an opened file does.
+        // Skipping it left "Untitled" tabs with no completion, no hover and no
+        // live diagnostics — the exact path most algorithm problems start from.
+        attachSemanticProvider(to: document)
         documents.append(document)
         selectedDocumentID = document.id
         updateWindowTitle()
@@ -174,6 +178,9 @@ public final class AppState: ObservableObject {
             stop()
         }
         documents.removeAll { $0.id == document.id }
+        // Forget the file's diagnostics with it, or reopening the path later
+        // would show stale squiggles from the previous session.
+        diagnosticsByFile.removeValue(forKey: document.semanticURL.standardizedFileURL)
         if selectedDocumentID == document.id {
             selectedDocumentID = documents.last?.id
         }
@@ -349,8 +356,18 @@ public final class AppState: ObservableObject {
     /// Recomputes whether Undo/Redo are available for whatever is focused.
     /// Semantic (clangd) completion state, for settings and diagnostics.
     @Published public var semanticCompletionReady = false
-    /// Most recent live diagnostics, exposed for the Problems panel.
-    @Published public var liveDiagnostics: [LSPDiagnostic] = []
+    /// Live diagnostics for the focused document, exposed for the Problems panel.
+    ///
+    /// Diagnostics belong to a *file*, not to the app: storing one global list
+    /// meant switching tabs showed the previous file's errors — and the Problems
+    /// panel would list errors from a file that is not even on screen.
+    public var liveDiagnostics: [LSPDiagnostic] {
+        guard let url = selectedDocument?.semanticURL.standardizedFileURL else { return [] }
+        return diagnosticsByFile[url] ?? []
+    }
+    /// Latest clangd result per file, keyed by standardized URL.
+    @Published private var diagnosticsByFile: [URL: [LSPDiagnostic]] = [:]
+
     private var semanticProvider: SemanticCompletionProvider?
     /// Workspace root clangd is bound to.
     private var semanticWorkspace: URL?
@@ -359,7 +376,10 @@ public final class AppState: ObservableObject {
     func configureSemanticCompletion() {
         let workspace = documents.first?.fileURL?.deletingLastPathComponent()
             ?? FileManager.default.temporaryDirectory
-        guard let provider = SemanticCompletionProvider(workingDirectory: workspace) else {
+        guard let provider = SemanticCompletionProvider(
+            workingDirectory: workspace,
+            standard: settings.standard
+        ) else {
             semanticCompletionReady = false
             return
         }
@@ -367,16 +387,16 @@ public final class AppState: ObservableObject {
         semanticWorkspace = workspace
         for document in documents {
             document.engine.textView.completionProvider = provider
-            document.engine.textView.documentFileURL = document.fileURL
+            document.engine.textView.documentFileURL = document.semanticURL
             document.engine.textView.onDocumentSync = { text, url in
                 provider.syncDocument(text: text, fileURL: url)
             }
-            provider.syncDocument(text: document.text, fileURL: document.fileURL)
+            provider.syncDocument(text: document.text, fileURL: document.semanticURL)
         }
         semanticCompletionReady = provider.isSemanticReady
         // Live diagnostics from clangd: underline the ranges it reports.
-        provider.onDiagnostics = { [weak self] url, items in
-            self?.applyLiveDiagnostics(items, for: url)
+        provider.onDiagnostics = { [weak self] url, items, text in
+            self?.applyLiveDiagnostics(items, for: url, text: text)
         }
         // Hover documentation, shown as a floating hint.
         for document in documents {
@@ -388,44 +408,29 @@ public final class AppState: ObservableObject {
     ///
     /// Positions arrive as LSP line/character pairs, which are 0-based and counted in
     /// UTF-16 units — the same units `NSString` uses, so the conversion is direct.
-    private func applyLiveDiagnostics(_ items: [LSPDiagnostic], for url: URL) {
+    private func applyLiveDiagnostics(_ items: [LSPDiagnostic], for url: URL, text: String) {
+        diagnosticsByFile[url.standardizedFileURL] = items
         guard let document = documents.first(where: {
-            $0.fileURL?.standardizedFileURL == url.standardizedFileURL
+            $0.semanticURL.standardizedFileURL == url.standardizedFileURL
         }) else { return }
-        let ns = document.text as NSString
+        // Convert against the text the diagnostics were computed from, not the
+        // current text: while the user types, the two differ and the marks would
+        // land on unrelated lines.
+        let ns = text as NSString
         var inline: [CodeTextView.InlineDiagnostic] = []
         for item in items {
             guard let range = Self.characterRange(for: item.range, in: ns) else { continue }
             let kind: CodeTextView.InlineDiagnostic.Kind = item.severity == .error ? .error : .warning
-            inline.append(.init(range: range, kind: kind, message: item.message))
+            inline.append(.init(range: range, kind: kind, message: item.message, code: item.code))
         }
         document.engine.textView.setDiagnostics(inline)
-        liveDiagnostics = items
-    }
-
-    /// Maps an LSP range onto `NSString` offsets.
-    static func characterRange(for range: LSPRange, in text: NSString) -> NSRange? {
-        func offset(_ position: LSPPosition) -> Int? {
-            var line = 0
-            var index = 0
-            while line < position.line {
-                let found = text.range(of: "\n", options: [],
-                                       range: NSRange(location: index, length: text.length - index))
-                if found.location == NSNotFound { return nil }
-                index = found.location + 1
-                line += 1
-            }
-            return min(index + position.character, text.length)
-        }
-        guard let start = offset(range.start), let end = offset(range.end), end >= start else { return nil }
-        return NSRange(location: start, length: end - start)
     }
 
     /// Installs hover and go-to-definition on one document.
     private func wireHoverAndNavigation(_ document: DocumentModel, provider: SemanticCompletionProvider) {
         document.engine.textView.onHoverQuery = { [weak self, weak document] offset in
             guard let self, let document else { return }
-            provider.hover(atUTCOffset: offset, in: document.text, fileURL: document.fileURL) { text in
+            provider.hover(atUTCOffset: offset, in: document.text, fileURL: document.semanticURL) { text in
                 guard let text, !text.isEmpty else {
                     document.engine.textView.hideHover()
                     return
@@ -444,7 +449,7 @@ public final class AppState: ObservableObject {
         // If the caret sits at the end of a word, look at the previous character so
         // the query lands inside the identifier.
         if offset > 0, offset >= (document.text as NSString).length { offset -= 1 }
-        provider.definition(atOffset: offset, in: document.text, fileURL: document.fileURL) { [weak self] locations in
+        provider.definition(atOffset: offset, in: document.text, fileURL: document.semanticURL) { [weak self] locations in
             guard let self, let first = locations.first else { return }
             self.openDefinition(first)
         }
@@ -468,11 +473,11 @@ public final class AppState: ObservableObject {
     func attachSemanticProvider(to document: DocumentModel) {
         guard let provider = semanticProvider else { return }
         document.engine.textView.completionProvider = provider
-        document.engine.textView.documentFileURL = document.fileURL
+        document.engine.textView.documentFileURL = document.semanticURL
         document.engine.textView.onDocumentSync = { text, url in
             provider.syncDocument(text: text, fileURL: url)
         }
-        provider.syncDocument(text: document.text, fileURL: document.fileURL)
+        provider.syncDocument(text: document.text, fileURL: document.semanticURL)
         wireHoverAndNavigation(document, provider: provider)
     }
 
@@ -785,29 +790,6 @@ public final class AppState: ObservableObject {
     /// True when a formatter is available, used to enable/disable the menu item.
     public var canFormat: Bool { settings.clangFormatExecutable != nil }
 
-    // MARK: - Problems navigation
-
-    public func reveal(diagnostic: Diagnostic) {
-        // Prefer the tab that produced the diagnostic.
-        let targetPath = DiagnosticsParser.canonicalPath(diagnostic.file, workingDirectory: nil)
-        let normalisedTarget = (targetPath as NSString).standardizingPath
-        if let document = documents.first(where: { document in
-            guard let compile = document.compileURL else { return false }
-            let candidate = (compile.path as NSString).standardizingPath
-            return candidate == normalisedTarget
-                || (candidate as NSString).lastPathComponent == (normalisedTarget as NSString).lastPathComponent
-        }) {
-            selectedDocumentID = document.id
-            document.engine.textView.goTo(line: diagnostic.line,
-                                          column: diagnostic.column,
-                                          highlightError: diagnostic.severity == .error)
-        } else if let document = selectedDocument {
-            document.engine.textView.goTo(line: diagnostic.line,
-                                          column: diagnostic.column,
-                                          highlightError: diagnostic.severity == .error)
-        }
-    }
-
     // MARK: - Output
 
     public func appendOutput(_ text: String, revealPanel: Bool = false) {
@@ -922,4 +904,188 @@ public final class AppState: ObservableObject {
         NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
         NSApp.activate(ignoringOtherApps: true)
     }
+}
+
+// MARK: - Problems, ranges and navigation
+//
+// Moved out of the main class body to stay within the lint budget. Nothing
+// here is `@Published`, so an extension has identical behaviour.
+extension AppState {
+/// Everything the Problems panel lists: compiler output plus clangd's live
+/// diagnostics for the focused file.
+///
+/// The two must be merged, not concatenated: the compiler only speaks after a
+/// build, while clangd speaks while typing. Listing them separately would make
+/// the panel look empty for the common case of editing before building.
+public var allProblems: [ProblemItem] {
+    var items: [ProblemItem] = []
+    let liveURL = selectedDocument?.fileURL?.standardizedFileURL
+    for lsp in liveDiagnostics {
+        // clangd positions are 0-based; the UI speaks in 1-based lines.
+        items.append(ProblemItem(severity: lsp.severity == .error ? .error : .warning,
+                                 message: lsp.message,
+                                 file: liveURL?.path ?? "",
+                                 line: lsp.range.start.line + 1,
+                                 column: lsp.range.start.character + 1,
+                                 code: lsp.code,
+                                 source: .clangd))
+    }
+    for parsed in diagnostics {
+        items.append(ProblemItem(severity: parsed.severity,
+                                 message: parsed.message,
+                                 file: parsed.file,
+                                 line: parsed.line,
+                                 column: parsed.column,
+                                 code: nil,
+                                 source: .compiler))
+    }
+    return items.sorted {
+        if $0.severity != $1.severity { return $0.severity < $1.severity }
+        if $0.file != $1.file { return $0.file < $1.file }
+        return $0.line < $1.line
+    }
+}
+
+/// One row in the Problems panel, from either source.
+public struct ProblemItem: Identifiable, Hashable {
+    public enum Source: Hashable {
+        case clangd
+        case compiler
+
+        public var label: String { self == .clangd ? "clangd" : "compiler" }
+    }
+
+    public let id = UUID()
+    public let severity: Diagnostic.Severity
+    public let message: String
+    public let file: String
+    public let line: Int
+    public let column: Int
+    public let code: String?
+    public let source: Source
+}
+
+/// Maps an LSP range onto `NSString` offsets.
+static func characterRange(for range: LSPRange, in text: NSString) -> NSRange? {
+    func offset(_ position: LSPPosition) -> Int? {
+        var line = 0
+        var index = 0
+        while line < position.line {
+            let found = text.range(of: "\n", options: [],
+                                   range: NSRange(location: index, length: text.length - index))
+            if found.location == NSNotFound { return nil }
+            index = found.location + 1
+            line += 1
+        }
+        return min(index + position.character, text.length)
+    }
+    guard let start = offset(range.start), let end = offset(range.end), end >= start else { return nil }
+    return NSRange(location: start, length: end - start)
+}
+
+/// Replaces the action's range with its text, as one undoable edit.
+func apply(codeAction action: LSPCodeAction, to document: DocumentModel) {
+    guard let updated = SemanticCompletionProvider.apply(action, to: document.text) else {
+        statusText = L10n.t("status.noFixAvailable")
+        return
+    }
+    let textView = document.engine.textView
+    let full = NSRange(location: 0, length: (document.text as NSString).length)
+    // Going through the text view keeps undo, dirty tracking and the clangd
+    // sync working exactly as if the user had typed the fix.
+    if textView.shouldChangeText(in: full, replacementString: updated) {
+        textView.replaceCharacters(in: full, with: updated)
+        textView.didChangeText()
+    }
+    statusText = action.title
+}
+
+public func reveal(problem: ProblemItem) {
+    // A clangd problem belongs to the focused file; a compiler problem names a
+    // path, which has to be matched against the open tabs first.
+    if problem.source == .clangd {
+        if let document = selectedDocument {
+            document.engine.textView.goTo(line: problem.line,
+                                          column: problem.column,
+                                          highlightError: problem.severity == .error)
+        }
+        return
+    }
+    let normalisedTarget = (problem.file as NSString).standardizingPath
+    if let document = documents.first(where: { document in
+        guard let compile = document.compileURL else { return false }
+        let candidate = (compile.path as NSString).standardizingPath
+        return candidate == normalisedTarget
+            || (candidate as NSString).lastPathComponent == (normalisedTarget as NSString).lastPathComponent
+    }) {
+        selectedDocumentID = document.id
+        document.engine.textView.goTo(line: problem.line,
+                                      column: problem.column,
+                                      highlightError: problem.severity == .error)
+    } else if let document = selectedDocument {
+        document.engine.textView.goTo(line: problem.line,
+                                      column: problem.column,
+                                      highlightError: problem.severity == .error)
+    }
+}
+
+public func reveal(diagnostic: Diagnostic) {
+    // Prefer the tab that produced the diagnostic.
+    let targetPath = DiagnosticsParser.canonicalPath(diagnostic.file, workingDirectory: nil)
+    let normalisedTarget = (targetPath as NSString).standardizingPath
+    if let document = documents.first(where: { document in
+        guard let compile = document.compileURL else { return false }
+        let candidate = (compile.path as NSString).standardizingPath
+        return candidate == normalisedTarget
+            || (candidate as NSString).lastPathComponent == (normalisedTarget as NSString).lastPathComponent
+    }) {
+        selectedDocumentID = document.id
+        document.engine.textView.goTo(line: diagnostic.line,
+                                      column: diagnostic.column,
+                                      highlightError: diagnostic.severity == .error)
+    } else if let document = selectedDocument {
+        document.engine.textView.goTo(line: diagnostic.line,
+                                      column: diagnostic.column,
+                                      highlightError: diagnostic.severity == .error)
+    }
+}
+
+/// True when the caret sits on a diagnostic clangd may have a fix for, used
+/// to enable the "Fix" menu item.
+public var canFixDiagnostic: Bool {
+    guard let document = selectedDocument else { return false }
+    return document.engine.textView.diagnostic(at: document.engine.textView.selectedRange().location) != nil
+}
+
+/// Applies the best available quick fix for the diagnostic at the caret.
+///
+/// clangd marks its recommended fix with `isPreferred`; when several are
+/// offered the preferred one is applied, otherwise the first. With no fix
+/// available nothing happens and the status line says so, rather than opening
+/// an empty menu.
+public func fixDiagnosticAtCaret() {
+    guard let document = selectedDocument, let provider = semanticProvider else { return }
+    let tv = document.engine.textView
+    guard let inline = tv.diagnostic(at: tv.selectedRange().location) else {
+        statusText = L10n.t("status.noFixHere")
+        return
+    }
+    // Match the editor's underline back to the server diagnostic, which is
+    // what `textDocument/codeAction` expects in its context.
+    guard let diagnostic = liveDiagnostics.first(where: {
+        Self.characterRange(for: $0.range, in: document.text as NSString) == inline.range
+    }) else {
+        statusText = L10n.t("status.noFixHere")
+        return
+    }
+    provider.codeActions(for: diagnostic, in: document.text,
+                         fileURL: document.semanticURL) { [weak self] actions in
+        guard let self else { return }
+        guard let action = actions.first(where: \.isPreferred) ?? actions.first else {
+            self.statusText = L10n.t("status.noFixAvailable")
+            return
+        }
+        self.apply(codeAction: action, to: document)
+    }
+}
 }

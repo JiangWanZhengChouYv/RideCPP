@@ -29,12 +29,22 @@ public final class SemanticCompletionProvider: CompletionProviding {
     /// Incremented on every document change; identifies the revision results belong to.
     private var revision = 0
     /// The file being edited, kept in sync with clangd.
-    private var currentURI: String?
-    private var lastSyncedText: String?
+    ///
+    /// Per-URI, not a single value: with several tabs open, one document's text
+    /// must never be mistaken for another's, and the dedupe below has to compare
+    /// against the text last sent for *that* file.
+    private var syncedText: [String: String] = [:]
+    /// URI completion requests are addressed to — the document with focus.
+    private var activeURI: String?
 
     public init?(fallback: BuiltinCompletionProvider = BuiltinCompletionProvider(),
-                 workingDirectory: URL) {
-        guard let session = ClangdSession(workingDirectory: workingDirectory) else { return nil }
+                 workingDirectory: URL,
+                 standard: String = "c++17") {
+        guard let session = ClangdSession(
+            workingDirectory: workingDirectory,
+            standard: standard,
+            extraIncludePaths: [ClangdSession.prepareCompatibilityHeaders()].compactMap { $0 }
+        ) else { return nil }
         self.fallback = fallback
         self.session = session
         self.session.start()
@@ -45,21 +55,22 @@ public final class SemanticCompletionProvider: CompletionProviding {
 
     /// Live diagnostics from clangd, keyed by file path.
     ///
-    /// Delivered on the main queue. The editor underlines these ranges, which is what
-    /// gives "errors while typing" without running the compiler.
-    public var onDiagnostics: ((URL, [LSPDiagnostic]) -> Void)? {
+    /// Delivered on the main queue, together with the exact document text the
+    /// diagnostics were computed from. The editor underlines these ranges, which is
+    /// what gives "errors while typing" without running the compiler.
+    public var onDiagnostics: ((URL, [LSPDiagnostic], String) -> Void)? {
         get { diagnosticHandler }
         set {
             diagnosticHandler = newValue
             // The session replays its last result to a new subscriber.
-            session.onDiagnostics = { [weak self] uri, items in
+            session.onDiagnostics = { [weak self] uri, items, text in
                 guard let self, let url = URL(string: uri) else { return }
-                self.diagnosticHandler?(url, items)
+                self.diagnosticHandler?(url, items, text)
             }
         }
     }
 
-    private var diagnosticHandler: ((URL, [LSPDiagnostic]) -> Void)?
+    private var diagnosticHandler: ((URL, [LSPDiagnostic], String) -> Void)?
 
     /// Hover documentation at a character offset (main queue).
     public func hover(atUTCOffset offset: Int, in text: String, fileURL: URL?,
@@ -94,6 +105,53 @@ public final class SemanticCompletionProvider: CompletionProviding {
     }
 
 
+    /// Applies a code action's edit to `text`, returning the new text.
+    ///
+    /// Ranges are LSP line/character pairs, converted here so the caller can stay
+    /// in plain Swift strings.
+    public static func apply(_ action: LSPCodeAction, to text: String) -> String? {
+        guard let newText = action.newText, let range = action.range else { return nil }
+        let ns = text as NSString
+        func offset(_ position: LSPPosition) -> Int? {
+            var line = 0
+            var index = 0
+            while line < position.line {
+                let found = ns.range(of: "\n", options: [],
+                                     range: NSRange(location: index, length: ns.length - index))
+                if found.location == NSNotFound { return nil }
+                index = found.location + 1
+                line += 1
+            }
+            let result = index + position.character
+            guard result <= ns.length else { return nil }
+            return result
+        }
+        guard let start = offset(range.start), let end = offset(range.end), end >= start else {
+            return nil
+        }
+        return ns.replacingCharacters(in: NSRange(location: start, length: end - start),
+                                      with: newText)
+    }
+
+    /// Quick fixes clangd offers for a diagnostic (main queue).
+    ///
+    /// Only actions that carry an applicable edit are returned: clangd also sends
+    /// refactorings that need a server-side command, and those cannot be applied
+    /// from a menu.
+    public func codeActions(for diagnostic: LSPDiagnostic,
+                            in text: String,
+                            fileURL: URL?,
+                            completion: @escaping ([LSPCodeAction]) -> Void) {
+        let url = fileURL ?? FileManager.default.temporaryDirectory
+            .appendingPathComponent("RideCPP-untitled.cpp")
+        session.requestCodeActions(uri: "file://" + url.path,
+                                   range: diagnostic.range,
+                                   diagnostics: [diagnostic]) { actions in
+            let applicable = actions.filter(\.isApplicable)
+            DispatchQueue.main.async { completion(applicable) }
+        }
+    }
+
     // MARK: - Document sync
 
     /// Pushes the current text to clangd. Cheap when unchanged.
@@ -102,9 +160,9 @@ public final class SemanticCompletionProvider: CompletionProviding {
             .appendingPathComponent("RideCPP-untitled.cpp")
         let uri = "file://" + url.path
         lock.lock()
-        let changed = currentURI != uri || lastSyncedText != text
-        currentURI = uri
-        lastSyncedText = text
+        let changed = syncedText[uri] != text
+        syncedText[uri] = text
+        activeURI = uri
         lock.unlock()
         guard changed else { return }
         lock.lock()
@@ -130,7 +188,7 @@ public final class SemanticCompletionProvider: CompletionProviding {
         guard context == .code else { return lexical }
 
         lock.lock()
-        let uri = currentURI
+        let uri = activeURI
         lock.unlock()
         guard let uri else { return lexical }
 
