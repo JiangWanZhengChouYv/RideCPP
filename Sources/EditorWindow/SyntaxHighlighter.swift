@@ -85,6 +85,11 @@ public final class SyntaxHighlighter {
                 layoutManager.addTemporaryAttribute(.foregroundColor, value: color, forCharacterRange: range)
             }
         }
+        // Re-apply error/warning text colours last: this pass just overwrote the
+        // whole visible range with syntax colours, so without this an error's red
+        // text would disappear on the next keystroke and only come back when
+        // clangd reported again.
+        textView?.reapplyDiagnosticColors()
     }
 
     /// Restores the plain text color without re-lexing.

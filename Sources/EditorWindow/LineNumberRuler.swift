@@ -11,6 +11,10 @@ public final class LineNumberRuler: NSRulerView {
 
     /// Line numbers that should be drawn in the "active" color.
     public var highlightedLines: Set<Int> = []
+    /// 1-based lines holding an error, marked in the gutter.
+    public var errorLines: Set<Int> = []
+    /// 1-based lines holding a warning, marked in the gutter.
+    public var warningLines: Set<Int> = []
 
     private static let minimumThickness: CGFloat = 38
     private static let horizontalPadding: CGFloat = 6
@@ -163,6 +167,35 @@ public final class LineNumberRuler: NSRulerView {
                             attributes: [NSAttributedString.Key: Any]) {
         let baselineY = convert(NSPoint(x: 0, y: baselineInTextView), from: textView).y
         drawNumber(number, baseline: baselineY, font: font, attributes: attributes)
+        drawMarker(forLine: number, baseline: baselineY, font: font)
+    }
+
+    /// Draws the error/warning badge at the gutter's leading edge.
+    ///
+    /// An error is a filled disc, a warning a triangle — distinguishable by shape
+    /// alone, so it still reads for colour-blind users and in grayscale.
+    private func drawMarker(forLine line: Int, baseline: CGFloat, font: NSFont) {
+        let isError = errorLines.contains(line)
+        let isWarning = !isError && warningLines.contains(line)
+        guard isError || isWarning else { return }
+        // Sized against the font so it stays proportional to the text, and clearly
+        // bigger than a bullet: the badge has to be findable while scanning a page.
+        let side = max(9, font.pointSize * 0.78)
+        let centerY = baseline - font.ascender / 2 - font.descender / 2
+        let x = Self.horizontalPadding - 2
+        if isError {
+            let rect = NSRect(x: x, y: centerY - side / 2, width: side, height: side)
+            NSColor.systemRed.setFill()
+            NSBezierPath(ovalIn: rect).fill()
+        } else {
+            let path = NSBezierPath()
+            path.move(to: NSPoint(x: x + side / 2, y: centerY + side / 2))
+            path.line(to: NSPoint(x: x, y: centerY - side / 2))
+            path.line(to: NSPoint(x: x + side, y: centerY - side / 2))
+            path.close()
+            NSColor.systemOrange.setFill()
+            path.fill()
+        }
     }
 
     private func currentLine(in textView: NSTextView) -> Int {

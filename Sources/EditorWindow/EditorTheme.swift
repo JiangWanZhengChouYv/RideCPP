@@ -46,6 +46,27 @@ public enum EditorTheme {
     public static let errorUnderline = NSColor.systemRed
     public static let warningUnderline = NSColor.systemOrange
 
+    /// Tint behind an offending token.
+    ///
+    /// A dotted underline alone is easy to miss while reading code, which is why
+    /// IDEs wash the token itself. Kept translucent so the syntax colouring
+    /// underneath is still legible.
+    public static let errorBackground = theme("errorBackground",
+                                              light: NSColor.systemRed.withAlphaComponent(0.22),
+                                              dark: NSColor.systemRed.withAlphaComponent(0.34))
+    public static let warningBackground = theme("warningBackground",
+                                                light: NSColor.systemOrange.withAlphaComponent(0.22),
+                                                dark: NSColor.systemOrange.withAlphaComponent(0.32))
+
+    /// Text colour for an offending token: red rather than the syntax colour, so
+    /// the eye lands on it from across the line.
+    public static let errorText = theme("errorText",
+                                        light: NSColor(red: 0.72, green: 0.08, blue: 0.10, alpha: 1),
+                                        dark: NSColor(red: 1.00, green: 0.52, blue: 0.50, alpha: 1))
+    public static let warningText = theme("warningText",
+                                          light: NSColor(red: 0.62, green: 0.32, blue: 0.00, alpha: 1),
+                                          dark: NSColor(red: 1.00, green: 0.72, blue: 0.36, alpha: 1))
+
     public static let lineNumberText = theme("lineNumber",
                                              light: NSColor(white: 0.52, alpha: 1),
                                              dark: NSColor(white: 0.52, alpha: 1))

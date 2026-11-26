@@ -814,19 +814,35 @@ public final class CodeTextView: NSTextView {
         guard let layoutManager else { return }
         let ns = string as NSString
         let full = NSRange(location: 0, length: ns.length)
-        layoutManager.removeTemporaryAttribute(.underlineColor, forCharacterRange: full)
-        layoutManager.removeTemporaryAttribute(.underlineStyle, forCharacterRange: full)
+        for key in Self.diagnosticAttributeKeys {
+            layoutManager.removeTemporaryAttribute(key, forCharacterRange: full)
+        }
         for item in items {
             // Clamp: the server reports ranges against the text it last saw, which
             // can be one edit behind ours.
             let clamped = NSIntersectionRange(item.range, NSRange(location: 0, length: ns.length))
             guard clamped.length > 0 else { continue }
-            let color = item.kind == .error ? EditorTheme.errorUnderline : EditorTheme.warningUnderline
+            let isError = item.kind == .error
+            // Four cues, because one is not enough to find a problem by eye: a
+            // tinted background, red text, a solid squiggle, and a gutter badge.
             layoutManager.addTemporaryAttributes([
-                .underlineStyle: NSUnderlineStyle.thick.rawValue | NSUnderlineStyle.patternDot.rawValue,
-                .underlineColor: color
+                .backgroundColor: isError ? EditorTheme.errorBackground : EditorTheme.warningBackground,
+                .foregroundColor: isError ? EditorTheme.errorText : EditorTheme.warningText
             ], forCharacterRange: clamped)
         }
+        refreshGutterMarkers()
+    }
+
+    /// Attributes this view owns, so they can be cleared without touching syntax
+    /// highlighting (which uses the same temporary-attribute mechanism).
+    static let diagnosticAttributeKeys: [NSAttributedString.Key] = [
+        .underlineColor, .underlineStyle, .backgroundColor, .foregroundColor
+    ]
+
+    /// Draws the squiggles; the drawing itself lives in an extension below.
+    public override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        Self.drawDiagnosticSquiggles(in: self, dirtyRect: dirtyRect)
     }
 
     /// Removes every inline diagnostic.
@@ -834,8 +850,52 @@ public final class CodeTextView: NSTextView {
         diagnostics = []
         guard let layoutManager else { return }
         let full = NSRange(location: 0, length: (string as NSString).length)
-        layoutManager.removeTemporaryAttribute(.underlineColor, forCharacterRange: full)
-        layoutManager.removeTemporaryAttribute(.underlineStyle, forCharacterRange: full)
+        for key in Self.diagnosticAttributeKeys {
+            layoutManager.removeTemporaryAttribute(key, forCharacterRange: full)
+        }
+        refreshGutterMarkers()
+    }
+
+    /// Re-applies the diagnostic text colours after syntax highlighting repainted
+    /// the whole visible range.
+    ///
+    /// Called by the highlighter, which owns `.foregroundColor` on the same
+    /// temporary-attribute store. Background and underline are untouched by
+    /// highlighting, so only the text colour needs restoring.
+    func reapplyDiagnosticColors() {
+        guard let layoutManager, !diagnostics.isEmpty else { return }
+        let ns = string as NSString
+        let full = NSRange(location: 0, length: ns.length)
+        for item in diagnostics {
+            let clamped = NSIntersectionRange(item.range, full)
+            guard clamped.length > 0 else { continue }
+            layoutManager.addTemporaryAttribute(
+                .foregroundColor,
+                value: item.kind == .error ? EditorTheme.errorText : EditorTheme.warningText,
+                forCharacterRange: clamped)
+        }
+    }
+
+    /// Pushes the current diagnostics' line numbers to the gutter.
+    ///
+    /// The n-th line the marks belong to, so the gutter can draw a badge next to
+    /// the line — the cue that survives even when the offending token is a single
+    /// character, or scrolled out of the visible columns.
+    private func refreshGutterMarkers() {
+        guard let scrollView = enclosingScrollView,
+              let ruler = scrollView.verticalRulerView as? LineNumberRuler else { return }
+        let ns = string as NSString
+        var errors: Set<Int> = []
+        var warnings: Set<Int> = []
+        for item in diagnostics {
+            guard item.range.location <= ns.length else { continue }
+            let lineRange = ns.lineRange(for: NSRange(location: item.range.location, length: 0))
+            let line = ns.substring(to: lineRange.location).components(separatedBy: "\n").count
+            if item.kind == .error { errors.insert(line) } else { warnings.insert(line) }
+        }
+        ruler.errorLines = errors
+        ruler.warningLines = warnings
+        ruler.needsDisplay = true
     }
 
     // MARK: - Completion hook (not implemented in this version)
@@ -1035,4 +1095,55 @@ class HoverTrackingView: NSView {
         super.mouseExited(with: event)
         onPointerInside?(false)
     }
+}
+
+// MARK: - Squiggles
+
+extension CodeTextView {
+/// Paints the wavy underlines.
+///
+/// Kept as a static helper so the view body stays within the lint budget.
+static func drawDiagnosticSquiggles(in textView: CodeTextView, dirtyRect: NSRect) {
+    guard let layoutManager = textView.layoutManager,
+          let container = textView.textContainer,
+          !textView.diagnostics.isEmpty else { return }
+    let origin = textView.textContainerOrigin
+    let amplitude: CGFloat = 1.8
+    let wavelength: CGFloat = 4.0
+    let length = (textView.string as NSString).length
+    for item in textView.diagnostics {
+        let clamped = NSIntersectionRange(item.range, NSRange(location: 0, length: length))
+        guard clamped.length > 0 else { continue }
+        let color = item.kind == .error ? EditorTheme.errorUnderline : EditorTheme.warningUnderline
+        color.setStroke()
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: clamped,
+                                                  actualCharacterRange: nil)
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { rect, _, _, _, _ in
+            let lineGlyphs = layoutManager.glyphRange(forBoundingRect: rect, in: container)
+            let overlap = NSIntersectionRange(lineGlyphs, glyphRange)
+            guard overlap.length > 0 else { return }
+            let start = layoutManager.boundingRect(
+                forGlyphRange: NSRange(location: overlap.location, length: 0), in: container)
+            let end = layoutManager.boundingRect(
+                forGlyphRange: NSRange(location: NSMaxRange(overlap) - 1, length: 1), in: container)
+            let y = rect.maxY + origin.y - 1
+            let x0 = start.minX + origin.x
+            let x1 = end.maxX + origin.x
+            guard x1 > x0 else { return }
+            let path = NSBezierPath()
+            path.lineWidth = 1.5
+            path.move(to: NSPoint(x: x0, y: y))
+            var x = x0
+            while x < x1 {
+                let next = min(x + wavelength / 2, x1)
+                let mid = (x + next) / 2
+                path.curve(to: NSPoint(x: next, y: y),
+                           controlPoint1: NSPoint(x: mid, y: y + amplitude),
+                           controlPoint2: NSPoint(x: mid, y: y - amplitude))
+                x = next
+            }
+            path.stroke()
+        }
+    }
+}
 }
