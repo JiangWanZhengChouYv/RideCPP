@@ -11,7 +11,7 @@ struct RideCPPApp: App {
     @StateObject private var settings = SettingsStore.shared
 
     var body: some Scene {
-        WindowGroup(L10n.t("app.name")) {
+        WindowGroup(L10n.appName) {
             ContentView()
                 .environmentObject(state)
                 .environmentObject(settings)

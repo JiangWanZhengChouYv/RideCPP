@@ -60,7 +60,13 @@ final class SelfTestRunner {
         // 1a. A fresh install defaults to -O2 (algorithm work needs it).
         let suite = "RideCPP.selftest.\(UUID().uuidString)"
         if let freshDefaults = UserDefaults(suiteName: suite) {
-            defer { freshDefaults.removePersistentDomain(forName: suite) }
+            defer {
+                // `removePersistentDomain` empties the domain, but cfprefsd still
+                // writes an empty plist to disk, so every self-test run used to
+                // leave one behind (124 had accumulated). Delete the file too.
+                freshDefaults.removePersistentDomain(forName: suite)
+                Self.removePreferencesFile(named: suite)
+            }
             let fresh = SettingsStore(defaults: freshDefaults, compilers: [], clangFormat: nil)
             record("default-optimization", fresh.optimization == "-O2",
                    "optimization=\(fresh.optimization)")
@@ -553,6 +559,27 @@ final class SelfTestRunner {
         await checkClangdIntegration(state, view: view)
     }
 
+
+    /// Deletes the on-disk plist for a throwaway defaults suite.
+    ///
+    /// `UserDefaults` alone leaves an empty file behind, so repeated self-test
+    /// runs accumulate one plist per run.
+    static func removePreferencesFile(named suite: String) {
+        // Ask cfprefsd to drop the domain, then remove the file it writes. The
+        // daemon owns the plist and rewrites it after the process exits, so
+        // deleting the file alone leaves an empty one behind.
+        let domains = Process()
+        domains.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
+        domains.arguments = ["delete", suite]
+        domains.standardOutput = FileHandle.nullDevice
+        domains.standardError = FileHandle.nullDevice
+        try? domains.run()
+        domains.waitUntilExit()
+
+        let file = ("~/Library/Preferences/" as NSString).expandingTildeInPath
+            .appending("/\(suite).plist")
+        try? FileManager.default.removeItem(atPath: file)
+    }
 
     /// Renders the real `SettingsView` offscreen and saves a PNG.
     private func snapshotSettingsView() -> Bool {

@@ -13,4 +13,16 @@ public enum L10n {
 
     /// Menu title for the editor-only commands (comment, indent, format).
     public static var codeMenuTitle: String { t("menu.edit") }
+
+    /// Display name of this build.
+    ///
+    /// Prefers the bundle's own name over the localized `app.name`: a renamed
+    /// copy (the "/Applications/RideCpp-Test" build used for trying builds) must
+    /// identify itself, or its window would claim to be the stable app and the
+    /// two would be impossible to tell apart.
+    public static var appName: String {
+        guard let name = Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String,
+              !name.isEmpty else { return t("app.name") }
+        return name
+    }
 }

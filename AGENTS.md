@@ -36,9 +36,13 @@ BuildKit       编译运行、工具链、进程、诊断解析、更新下载
 
 ### 开发规则
 
-1. **不要碰 `/Applications`。**
-   `make install` 默认只构建到 `build/`；替换已安装应用必须显式 `make install RELEASE=1`。
-   开发和测试一律运行 `build/Build/Products/Debug/RideCPP.app`。
+1. **不要碰用户的稳定版。**
+   - 开发和自动化测试一律运行 `build/Build/Products/Debug/RideCPP.app`。
+   - 给用户试用：`make install-test` → 装到 `/Applications/RideCpp-Test.app`。
+     它是**独立应用**（bundle id `com.ridecpp.RideCPPTest`，名字 `RideCpp-Test`），
+     与稳定版 `/Applications/RideCPP.app` 的设置、文件关联、自动更新完全隔离。
+   - `make install` 默认拒绝写 `/Applications`；只有显式 `make install RELEASE=1`
+     才会替换稳定版，**不要主动执行**。
 
 2. **重构前必须先向用户说明方案**，得到确认再动手。不要闷头在旧结构上继续加功能。
 

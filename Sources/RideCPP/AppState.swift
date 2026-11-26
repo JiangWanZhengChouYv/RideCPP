@@ -875,7 +875,7 @@ public final class AppState: ObservableObject {
 
     private func updateWindowTitle() {
         for window in NSApp.windows where window.isVisible {
-            window.title = selectedDocument?.title ?? L10n.t("app.name")
+            window.title = selectedDocument?.title ?? L10n.appName
         }
     }
 

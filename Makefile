@@ -96,6 +96,47 @@ else
 endif
 
 # ---------------------------------------------------------------------------
+# Test install
+#
+# A second copy in /Applications for trying builds without disturbing the
+# stable app. It is deliberately a *different app*, not a copy of the same one:
+#
+#   * name      RideCpp-Test.app  (so the Dock and menu bar say which is which)
+#   * bundle id com.ridecpp.RideCPPTest
+#
+# Sharing the stable bundle id would make both copies read and write the same
+# preferences (`defaults` keys off the bundle id), so a test build's settings
+# would silently change the stable app, and LaunchServices could not tell the
+# two apart. The separate identity also means the in-app updater, which targets
+# `Bundle.main`, only ever replaces the test copy.
+# ---------------------------------------------------------------------------
+TEST_APP_NAME  := RideCpp-Test
+TEST_BUNDLE_ID := com.ridecpp.RideCPPTest
+TEST_APP       := $(INSTALL_DIR)/$(TEST_APP_NAME).app
+
+.PHONY: install-test
+install-test: build
+	@# Refuse to clobber the stable app if the names ever collide.
+	@if [ "$(TEST_APP)" = "$(INSTALLED_APP)" ]; then \
+		echo "Refusing: test and stable install paths are identical."; exit 1; fi
+	@rm -rf "$(TEST_APP)"
+	@cp -R "$(APP)" "$(TEST_APP)"
+	@# Rename the identity in place. Passing PRODUCT_NAME to xcodebuild would
+	@# rename every framework in the scheme too, so the copy is rebranded here.
+	@/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $(TEST_BUNDLE_ID)" \
+		-c "Set :CFBundleName $(TEST_APP_NAME)" -c "Set :CFBundleDisplayName $(TEST_APP_NAME)" \
+		"$(TEST_APP)/Contents/Info.plist"
+	@codesign --force --deep --sign - "$(TEST_APP)" >/dev/null 2>&1 || true
+	@xattr -dr com.apple.quarantine "$(TEST_APP)" 2>/dev/null || true
+	@/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+		-f "$(TEST_APP)" >/dev/null 2>&1 || true
+	@# Keep the build-tree copy unregistered so the Dock shows one icon per app.
+	@/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+		-u "$(APP)" >/dev/null 2>&1 || true
+	@echo "Installed test build: $(TEST_APP)"
+	@echo "Stable app left untouched: $(INSTALLED_APP)"
+
+# ---------------------------------------------------------------------------
 # Distribution
 #
 # `make dist` produces a Release build for both Apple silicon and Intel and packs

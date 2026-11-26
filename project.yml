@@ -87,8 +87,11 @@ targets:
     info:
       path: Sources/RideCPP/Info.plist
       properties:
-        CFBundleName: RideCPP
-        CFBundleDisplayName: RideCPP
+        # Derived from PRODUCT_NAME so a renamed build (the /Applications test
+        # copy, "RideCpp-Test") shows its own name in the menu bar and Dock
+        # instead of claiming to be the stable install.
+        CFBundleName: "$(PRODUCT_NAME)"
+        CFBundleDisplayName: "$(PRODUCT_NAME)"
         CFBundleIconName: AppIcon
         CFBundleDevelopmentRegion: en
         CFBundleLocalizations:
