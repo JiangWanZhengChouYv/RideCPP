@@ -408,6 +408,7 @@ final class SelfTestRunner {
         record("diagnostics", !errors.isEmpty,
                "first=\(errors.first.map { "\($0.line):\($0.column) \($0.message)" } ?? "none")")
         await checkProblemsPanel(state, view: view)
+        await checkInlinePrediction(state, view: view)
 
     }
 
@@ -583,7 +584,9 @@ final class SelfTestRunner {
 
     /// Renders the real `SettingsView` offscreen and saves a PNG.
     private func snapshotSettingsView() -> Bool {
-        let view = NSHostingView(rootView: SettingsView().environmentObject(SettingsStore.shared))
+        let view = NSHostingView(rootView: SettingsView()
+            .environmentObject(SettingsStore.shared)
+            .environmentObject(AppState.shared))
         view.frame = NSRect(x: 0, y: 0, width: 560, height: 420)
         view.layoutSubtreeIfNeeded()
         view.displayIfNeeded()
@@ -715,6 +718,67 @@ extension SelfTestRunner {
     /// Problems panel: live clangd diagnostics merged with compiler output.
     ///
     /// Split out of `checkBuildAndRun`, which had grown past the lint budget.
+    /// Inline prediction: the offline predictor must answer instantly, the ghost
+    /// text must be acceptable with Tab, and it must never run into the text.
+    private func checkInlinePrediction(_ state: AppState, view: CodeTextView) async {
+        let source = "int main() {\n    int n;\n    cin >> n;\n"
+        view.string = source
+        view.setSelectedRange(NSRange(location: (source as NSString).length, length: 0))
+        let predictor = StatisticalPredictor(storageURL: nil)
+        view.onRequestSuggestion = { prefix, suffix in
+            predictor.predict(prefixBeforeCaret: prefix, document: view.string,
+                              suffixAfterCaret: suffix)
+        }
+        view.insertText("    ", replacementRange: NSRange(location: NSNotFound, length: 0))
+        view.insertText("for", replacementRange: NSRange(location: NSNotFound, length: 0))
+        // The request is debounced, so let the run loop deliver it.
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline, !view.hasSuggestion {
+            for _ in 0..<10 { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        let offered = view.hasSuggestion
+        let accepted = view.acceptSuggestion()
+        for _ in 0..<10 { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+        // The continuation must keep the space after `for`, and complete the loop.
+        let correct = view.string.contains("for (int i") && view.string.contains(") {")
+        record("inline-prediction-offline",
+               offered && accepted && correct,
+               "offered=\(offered) accepted=\(accepted) tail=\(escaped(String(view.string.suffix(40))))")
+
+        // Undo must remove the accepted text in one step.
+        let afterAccept = view.string
+        view.undoManager?.undo()
+        for _ in 0..<10 { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+        record("inline-prediction-undoable", view.string != afterAccept,
+               "after=\(escaped(String(view.string.suffix(30))))")
+
+        // Escape dismisses without inserting anything. The caret must sit at the
+        // end of a line that already has content, which is when a continuation is
+        // meaningful.
+        view.string = "int main() {\n    int n;\n"
+        view.setSelectedRange(NSRange(location: (view.string as NSString).length, length: 0))
+        view.onRequestSuggestion = { _, _ in " (int j = 0; j < 9; ++j) {" }
+        view.requestSuggestionNow()
+        let shown = view.hasSuggestion
+        view.dismissSuggestion()
+        record("inline-prediction-dismiss", shown && !view.hasSuggestion,
+               "shown=\(shown) remaining=\(view.hasSuggestion)")
+
+        // What the model situation is, so the settings screen has something to say.
+        state.refreshOllamaAvailability()
+        let availDeadline = Date().addingTimeInterval(10)
+        while Date() < availDeadline, state.ollamaAvailability == nil {
+            for _ in 0..<10 { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        record("ollama-detected",
+               state.ollamaAvailability != nil,
+               "availability=\(state.ollamaAvailability.map { "\($0)" } ?? "nil")")
+        view.onRequestSuggestion = nil
+        view.string = ""
+    }
+
     private func checkProblemsPanel(_ state: AppState, view: CodeTextView) async {
         // The panel must merge both sources: the compiler only speaks after a
         // build, clangd speaks while typing, and users expect one list.

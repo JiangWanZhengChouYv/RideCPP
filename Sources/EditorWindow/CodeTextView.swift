@@ -52,6 +52,10 @@ public final class CodeTextView: NSTextView {
     /// undo, drag-and-drop and programmatic replacement alike.
     func notifyDocumentChanged() {
         onDocumentSync?(self.string, documentFileURL)
+        // A prediction describes the text it was made for; once that text
+        // changes it is stale. Ask again after the user stops typing.
+        dismissSuggestion()
+        scheduleSuggestionRequest()
     }
 
     /// Called when a button inside the hover panel is clicked.
@@ -478,6 +482,12 @@ public final class CodeTextView: NSTextView {
     }
 
     public override func cancelOperation(_ sender: Any?) {
+        // Escape dismisses the ghost text first; the completion list and the
+        // rest of the responder chain stay reachable on a second press.
+        if inlineSuggestion.isVisible {
+            dismissSuggestion()
+            return
+        }
         if completionPanel?.isShowing == true {
             completionPanel?.cancel()
             return
@@ -503,6 +513,9 @@ public final class CodeTextView: NSTextView {
             super.insertTab(sender)
             return
         }
+        // Tab accepts the prediction when one is showing, and indents otherwise:
+        // the ghost text is only ever what the single next key acts on.
+        if acceptSuggestion() { return }
         apply(EditPlanner.apply(.tab, to: string, selection: selectedRange(), settings: editSettings))
     }
 
@@ -861,12 +874,33 @@ public final class CodeTextView: NSTextView {
     /// Called after the effective appearance changed, so the engine can repaint.
     public var onAppearanceChange: (() -> Void)?
 
+    /// The predicted continuation shown as ghost text after the caret.
+    let inlineSuggestion = InlineSuggestionView()
+    /// Asks the owner for a prediction. Must answer quickly or not at all.
+    public var onRequestSuggestion: ((_ prefixToCaret: String, _ suffix: String) -> String?)?
+    /// Called when the user accepts the ghost text (Tab).
+    public var onAcceptSuggestion: (() -> Void)?
+    /// Pending prediction request.
+    var pendingSuggestionWork: DispatchWorkItem?
+
+
+    /// Shows a prediction at the caret, or clears it when there is none.
+
+    /// Inserts the pending suggestion as a normal, undoable edit.
+    ///
+    /// Returns false when there is nothing to accept, so Tab can fall back to
+    /// indentation.
+    @discardableResult
+
 
     /// Draws the squiggles; the drawing itself lives in an extension below.
     public override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         Self.drawDiagnosticSquiggles(in: self, dirtyRect: dirtyRect)
+        drawInlineSuggestion()
     }
+
+
 
     /// Removes every inline diagnostic.
     public func clearErrorMarkers() {
@@ -882,26 +916,6 @@ public final class CodeTextView: NSTextView {
         }
         if !previous.isEmpty { scheduleRehighlight() }
         refreshGutterMarkers()
-    }
-
-    /// Re-applies the diagnostic text colours after syntax highlighting repainted
-    /// the whole visible range.
-    ///
-    /// Called by the highlighter, which owns `.foregroundColor` on the same
-    /// temporary-attribute store. Background and underline are untouched by
-    /// highlighting, so only the text colour needs restoring.
-    func reapplyDiagnosticColors() {
-        guard let layoutManager, !diagnostics.isEmpty else { return }
-        let ns = string as NSString
-        let full = NSRange(location: 0, length: ns.length)
-        for item in diagnostics {
-            let clamped = NSIntersectionRange(item.range, full)
-            guard clamped.length > 0 else { continue }
-            layoutManager.addTemporaryAttribute(
-                .foregroundColor,
-                value: item.kind == .error ? EditorTheme.errorText : EditorTheme.warningText,
-                forCharacterRange: clamped)
-        }
     }
 
     /// Pushes the current diagnostics' line numbers to the gutter.
@@ -1013,6 +1027,26 @@ public final class CodeTextView: NSTextView {
 // MARK: - Squiggles
 
 extension CodeTextView {
+/// Re-applies the diagnostic text colours after syntax highlighting repainted
+/// the whole visible range.
+///
+/// Called by the highlighter, which owns `.foregroundColor` on the same
+/// temporary-attribute store. Background and underline are untouched by
+/// highlighting, so only the text colour needs restoring.
+func reapplyDiagnosticColors() {
+    guard let layoutManager, !diagnostics.isEmpty else { return }
+    let ns = string as NSString
+    let full = NSRange(location: 0, length: ns.length)
+    for item in diagnostics {
+        let clamped = NSIntersectionRange(item.range, full)
+        guard clamped.length > 0 else { continue }
+        layoutManager.addTemporaryAttribute(
+            .foregroundColor,
+            value: item.kind == .error ? EditorTheme.errorText : EditorTheme.warningText,
+            forCharacterRange: clamped)
+    }
+}
+
 /// Repaints syntax colours after diagnostics were removed from a range.
 ///
 /// Removing `.foregroundColor` from a diagnostic's characters also strips the

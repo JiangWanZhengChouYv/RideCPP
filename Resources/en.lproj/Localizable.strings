@@ -188,3 +188,20 @@
 "status.noFixAvailable" = "clangd has no automatic fix for this problem";
 
 "hover.fix" = "Fix";
+
+"settings.tab.prediction" = "Predictions";
+"settings.prediction.offline" = "Built-in prediction";
+"settings.prediction.offline.detail" = "RideCPP learns from the code you write and suggests the rest of the line as grey text. Press Tab to accept, Escape to dismiss. This needs no model and no network.";
+"settings.prediction.model" = "Local model (optional)";
+"settings.prediction.useModel" = "Use a local model for longer suggestions";
+"settings.prediction.ready" = "Model";
+"settings.prediction.ready.detail" = "Ready. Suggestions appear about a tenth of a second after you pause typing.";
+"settings.prediction.missing" = "%@ is not installed yet. It is about 400 MB and runs entirely on this Mac.";
+"settings.prediction.pull" = "Download %@";
+"settings.prediction.pulled" = "Downloaded.";
+"settings.prediction.notRunning" = "Ollama is installed but not running";
+"settings.prediction.notRunning.detail" = "Open the Ollama app once, or run `ollama serve`. RideCPP will keep using its built-in prediction meanwhile.";
+"settings.prediction.notInstalled" = "Ollama is not installed";
+"settings.prediction.notInstalled.detail" = "Ollama runs local models on your Mac. Without it RideCPP still predicts from your own code — it just cannot suggest longer passages.";
+"settings.prediction.getOllama" = "Get Ollama";
+"settings.prediction.recheck" = "Check again";

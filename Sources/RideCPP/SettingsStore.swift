@@ -21,6 +21,17 @@ public final class SettingsStore: ObservableObject {
     @Published public var autoIndent: Bool { didSet { defaults.set(autoIndent, forKey: Keys.autoIndent) } }
     @Published public var showLineNumbers: Bool { didSet { defaults.set(showLineNumbers, forKey: Keys.showLineNumbers) } }
 
+    // Inline predictions
+    /// Whether the local model may be consulted for continuations.
+    ///
+    /// Off by default: a model request costs a little power, and the offline
+    /// predictor already covers the common shapes without asking for anything.
+    @Published public var inlineModelEnabled: Bool {
+        didSet { defaults.set(inlineModelEnabled, forKey: Keys.inlineModelEnabled) }
+    }
+    /// Model used for inline suggestions, empty to pick automatically.
+    @Published public var inlineModel: String { didSet { defaults.set(inlineModel, forKey: Keys.inlineModel) } }
+
     // Build
     @Published public var compilerPath: String { didSet { defaults.set(compilerPath, forKey: Keys.compilerPath) } }
     @Published public var standard: String { didSet { defaults.set(standard, forKey: Keys.standard) } }
@@ -48,6 +59,8 @@ public final class SettingsStore: ObservableObject {
         static let autoPair = "editor.autoPair"
         static let autoComplete = "editor.autoComplete"
         static let autoIndent = "editor.autoIndent"
+        static let inlineModelEnabled = "completion.inlineModelEnabled"
+        static let inlineModel = "completion.inlineModel"
         static let showLineNumbers = "editor.showLineNumbers"
         static let compilerPath = "build.compilerPath"
         static let standard = "build.standard"
@@ -75,6 +88,8 @@ public final class SettingsStore: ObservableObject {
             Keys.autoPair: true,
             Keys.autoComplete: true,
             Keys.autoIndent: true,
+            Keys.inlineModelEnabled: false,
+            Keys.inlineModel: "",
             Keys.showLineNumbers: true,
             Keys.compilerPath: discovered.first?.path ?? "/usr/bin/clang++",
             Keys.standard: "c++17",
@@ -92,6 +107,8 @@ public final class SettingsStore: ObservableObject {
         autoComplete = defaults.bool(forKey: Keys.autoComplete)
         autoIndent = defaults.bool(forKey: Keys.autoIndent)
         showLineNumbers = defaults.bool(forKey: Keys.showLineNumbers)
+        inlineModelEnabled = defaults.bool(forKey: Keys.inlineModelEnabled)
+        inlineModel = defaults.string(forKey: Keys.inlineModel) ?? ""
         compilerPath = defaults.string(forKey: Keys.compilerPath) ?? "/usr/bin/clang++"
         standard = defaults.string(forKey: Keys.standard) ?? "c++17"
         optimization = defaults.string(forKey: Keys.optimization) ?? "-O2"

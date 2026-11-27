@@ -188,3 +188,20 @@
 "status.noFixAvailable" = "clangd 没有针对该问题的自动修复";
 
 "hover.fix" = "修复";
+
+"settings.tab.prediction" = "智能续写";
+"settings.prediction.offline" = "内置续写";
+"settings.prediction.offline.detail" = "RideCPP 会从你写的代码里学习，用灰字提示这一行剩下的部分。按 Tab 接受，按 Esc 忽略。不需要模型，也不需要联网。";
+"settings.prediction.model" = "本地模型（可选）";
+"settings.prediction.useModel" = "使用本地模型给出更长的建议";
+"settings.prediction.ready" = "模型";
+"settings.prediction.ready.detail" = "已就绪。停止打字约十分之一秒后就会给出建议。";
+"settings.prediction.missing" = "还没有下载 %@。约 400 MB，完全在这台 Mac 上运行。";
+"settings.prediction.pull" = "下载 %@";
+"settings.prediction.pulled" = "下载完成。";
+"settings.prediction.notRunning" = "已安装 Ollama，但服务没有运行";
+"settings.prediction.notRunning.detail" = "打开一次 Ollama 应用，或执行 `ollama serve`。在此期间 RideCPP 会继续使用内置续写。";
+"settings.prediction.notInstalled" = "没有安装 Ollama";
+"settings.prediction.notInstalled.detail" = "Ollama 可以在这台 Mac 上运行本地模型。没有它 RideCPP 仍然能从你自己的代码里学习续写，只是没法给出更长的段落。";
+"settings.prediction.getOllama" = "获取 Ollama";
+"settings.prediction.recheck" = "重新检查";

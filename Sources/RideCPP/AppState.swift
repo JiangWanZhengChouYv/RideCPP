@@ -372,11 +372,27 @@ public final class AppState: ObservableObject {
     /// Workspace root clangd is bound to.
     private var semanticWorkspace: URL?
 
+    // MARK: - Inline predictions
+
+    /// Offline predictor, always available.
+    let predictor = StatisticalPredictor()
+    /// Local model client (Ollama).
+    let ollama = OllamaClient()
+    /// Model to use, once one has been found on the server.
+    @Published public internal(set) var inlineModelName: String?
+    /// What the local model situation is, for the settings UI.
+    @Published public internal(set) var ollamaAvailability: OllamaClient.Availability?
+    /// Bumped per request so a late answer cannot overwrite a newer one.
+    var inlineSuggestionGeneration = 0
+    /// In-flight model download.
+    var pendingPull: OllamaClient.PullTask?
+
     /// Creates the clangd-backed provider and wires it to every open document.
     func configureSemanticCompletion() {
         // The hover panel's buttons live in EditorWindow, which cannot read the
         // localization table; hand it the translated labels.
         CodeTextView.setHoverActionTitle(L10n.t("hover.fix"), for: "fix")
+        refreshOllamaAvailability()
         let workspace = documents.first?.fileURL?.deletingLastPathComponent()
             ?? FileManager.default.temporaryDirectory
         guard let provider = SemanticCompletionProvider(
@@ -475,15 +491,18 @@ public final class AppState: ObservableObject {
 
     /// Points a newly opened document at the semantic provider as well.
     func attachSemanticProvider(to document: DocumentModel) {
-        guard let provider = semanticProvider else { return }
-        document.engine.textView.completionProvider = provider
-        document.engine.textView.documentFileURL = document.semanticURL
-        document.engine.textView.onDocumentSync = { text, url in
-            provider.syncDocument(text: text, fileURL: url)
+        if let provider = semanticProvider {
+            document.engine.textView.completionProvider = provider
+            document.engine.textView.documentFileURL = document.semanticURL
+            document.engine.textView.onDocumentSync = { text, url in
+                provider.syncDocument(text: text, fileURL: url)
+            }
+            provider.syncDocument(text: document.text, fileURL: document.semanticURL)
+            wireHoverAndNavigation(document, provider: provider)
         }
-        provider.syncDocument(text: document.text, fileURL: document.semanticURL)
-        wireHoverAndNavigation(document, provider: provider)
+        wireInlineSuggestion(document)
     }
+
 
     /// Updates the breadcrumb symbol and the Ln/Col readout.
     public func updateCaretContext(line: Int, column: Int, text: String) {

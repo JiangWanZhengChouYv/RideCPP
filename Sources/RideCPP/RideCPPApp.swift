@@ -22,6 +22,7 @@ struct RideCPPApp: App {
 
         Settings {
             SettingsView()
+                .environmentObject(state)
                 .environmentObject(settings)
         }
     }
