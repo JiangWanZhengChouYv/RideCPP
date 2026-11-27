@@ -217,53 +217,132 @@ public final class OllamaClient {
         for marker in ["```cpp", "```c++", "```c", "```"] {
             text = text.replacingOccurrences(of: marker, with: "")
         }
-        // Leading newlines are common and would otherwise make the first line
-        // empty, silently discarding a good continuation. Only newlines are
-        // trimmed: a leading space is meaningful, since `for` followed by
-        // ` (int i...` must not become `for(int`.
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "" }
+        // Small models pad their output with spaces. Leading spaces are not part of
+        // the continuation unless the line's syntax needs them, and those are
+        // re-added below.
+        let hadLeadingSpace = text.hasPrefix(" ")
+        text = String(text.drop { $0 == " " || $0 == "\t" })
+
+        // A leading newline means "continue on the next line", which is a normal
+        // thing for the model to say: after `int n;` it wants to start a new
+        // statement. That is kept as a multi-line suggestion rather than being
+        // trimmed into a bogus continuation of the current line.
+        var opensNewLine = false
         while text.hasPrefix("\n") || text.hasPrefix("\r") {
             text.removeFirst()
+            opensNewLine = true
         }
         guard !text.isEmpty else { return "" }
 
-        // The continuation must extend what the user is typing rather than start
-        // a fresh statement. A model answering `wh` with `cout << n << endl;`
-        // would corrupt the line if inserted.
-        if !typedWord.isEmpty {
-            let typed = typedWord.trimmingCharacters(in: .whitespaces).lowercased()
-            let firstChunk = String(text.prefix { $0.isLetter || $0.isNumber || $0 == "_" })
-                .lowercased()
-            // A word continuation must agree with what has been typed: `wh` + `ile`
-            // is `while`, `vec` + `tor` is `vector`; `wh` + `cout` is a new word.
-            let continuesWord: Bool = {
-                guard !typed.isEmpty, !firstChunk.isEmpty else { return false }
-                let joined = typed + firstChunk
-                guard joined.count <= 40 else { return false }
-                // The typed letters and the continuation must form one identifier,
-                // and nothing may be retyped: `while` starts with `wh`, so `ile`
-                // follows; `cout` follows nothing.
-                return (firstChunk.hasPrefix(typed) && typed != firstChunk)
-                    || (typed.hasPrefix(firstChunk) && firstChunk != typed)
-            }()
-            let startsWithPunctuation = text.first.map {
-                "( <.[>;{: ,=+-*/%!&|?)".contains($0)
-            } ?? false
-            guard startsWithPunctuation || continuesWord else { return "" }
+        if !opensNewLine {
+            // The continuation must extend what the user is typing rather than
+            // replace it. A model answering `wh` with `cout << n << endl;` would
+            // corrupt the line if inserted.
+            // The model often repeats the part already typed (`fo` → `for (…`).
+            // Sending that through would insert `fofor`, so the overlap is removed.
+            let typedLower = typedWord.trimmingCharacters(in: .whitespaces).lowercased()
+            if !typedLower.isEmpty {
+                let head = String(text.prefix(typedLower.count)).lowercased()
+                if head == typedLower, text.count > typedLower.count {
+                    text = String(text.dropFirst(typedLower.count))
+                    text = String(text.drop { $0 == " " })
+                    guard !text.isEmpty else { return "" }
+                }
+            }
+            guard continuesLine(text, typedWord: typedWord) else { return "" }
+            // `for` needs a space before its parenthesis; the model's own padding
+            // was stripped above, so it is restored deliberately and only once.
+            if hadLeadingSpace, text.hasPrefix("(") {
+                text = " " + text
+            }
+            let lines = text.components(separatedBy: "\n")
+            let first = lines[0]
+            guard !first.isEmpty else { return "" }
+            // A continuation that opens a block reads better with the body's first
+            // line; anything longer starts to cover the code beneath.
+            if first.contains("{"), !first.contains("}"), lines.count > 1 {
+                let body = lines[1]
+                if !body.trimmingCharacters(in: .whitespaces).isEmpty {
+                    return first + "\n" + body
+                }
+            }
+            return first
         }
 
-        let lines = text.components(separatedBy: "\n")
-        let first = lines[0]
-        guard !first.isEmpty else { return "" }
-        // A continuation that opens a block usually reads better with the body's
-        // first line; anything longer starts to cover the code beneath.
-        if first.contains("{"), !first.contains("}"), lines.count > 1 {
-            let body = lines[1]
-            if !body.trimmingCharacters(in: .whitespaces).isEmpty {
-                return first + "\n" + body
+        // Starting a new line: keep the statement and, when it opens a block, its
+        // first body line. More than that covers the code underneath.
+        var lines = text.components(separatedBy: "\n")
+        while let first = lines.first, first.trimmingCharacters(in: .whitespaces).isEmpty {
+            lines.removeFirst()
+        }
+        guard let firstLine = lines.first else { return "" }
+        if firstLine.contains("{"), !firstLine.contains("}"), lines.count > 1 {
+            let next = lines[1]
+            if !next.trimmingCharacters(in: .whitespaces).isEmpty {
+                return "\n" + firstLine + "\n" + next
             }
         }
-        return first
+        return "\n" + firstLine
     }
+
+    /// Whether `text` continues the line the user is typing.
+    ///
+    /// Two shapes are a continuation: punctuation that extends the expression
+    /// (`(a.begin(), ` → `a.end())`), or the rest of the identifier being typed
+    /// (`vec` → `tor<int>`). A different word is a new statement and is rejected.
+    static func continuesLine(_ text: String, typedWord: String) -> Bool {
+        let typed = typedWord.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !typed.isEmpty else { return true }
+
+        // Punctuation that extends the expression being typed.
+        let continuationSymbols: Set<Character> = ["(", " ", "<", ".", "[", ">", ";", "{",
+                                                   ":", ",", "=", "+", "-", "*", "/", "%",
+                                                   "!", "&", "|", "?", ")", "}"]
+        // One leading space is meaningful (`for` + ` (int i…`); several, or a space
+        // in front of a word fragment, is the model formatting rather than
+        // continuing — inserting it would give `f  or (int i…`.
+        if text.hasPrefix("  ") { return false }
+        if let first = text.first, continuationSymbols.contains(first) {
+            // A space introduces punctuation or an operator, not a word fragment.
+            if first == " " {
+                let afterSpace = text.dropFirst().first
+                return afterSpace.map { continuationSymbols.contains($0) || $0 == ">" } ?? false
+            }
+            return true
+        }
+
+        // The model is spelling out the rest of a word. Accept only when the two
+        // halves join into a keyword or identifier the language knows — `w` +
+        // `hile` = `while`, `vec` + `tor` = `vector`. `wh` + `cout` joins into
+        // nothing, so it is a different statement rather than a continuation.
+        let chunk = String(text.prefix { $0.isLetter || $0.isNumber || $0 == "_" }).lowercased()
+        guard !chunk.isEmpty else { return false }
+        // Either the model spells out the rest of the word (`wh` + `ile`), or it
+        // repeats the whole word and continues (`wh` → `while (cin >> n) {`).
+        // Repeating the word already typed would produce `sortsort`, so a chunk
+        // identical to what is there is not a continuation.
+        guard chunk != typed else { return false }
+        return knownWords.contains(typed + chunk) || chunk.hasPrefix(typed)
+    }
+
+    /// Words a C++ file plausibly begins with, used to recognise a continuation
+    /// that completes the identifier being typed.
+    static let knownWords: Set<String> = [
+        "while", "for", "if", "else", "return", "break", "continue", "switch", "case",
+        "default", "do", "sizeof", "struct", "class", "namespace", "using", "typedef",
+        "template", "typename", "public", "private", "protected", "const", "static",
+        "inline", "virtual", "operator", "new", "delete", "this", "nullptr",
+        "vector", "string", "map", "set", "queue", "stack", "deque", "pair", "tuple",
+        "priority_queue", "unordered_map", "unordered_set", "list", "array", "bitset",
+        "cout", "cin", "cerr", "endl", "printf", "scanf", "sort", "reverse", "max",
+        "min", "abs", "swap", "fill", "count", "find", "lower_bound", "upper_bound",
+        "push_back", "pop_back", "push", "pop", "top", "front", "back", "size",
+        "empty", "clear", "insert", "erase", "begin", "end", "resize", "assign",
+        "accumulate", "to_string", "stoi", "stoll", "memset", "memcpy", "strlen",
+        "int", "long", "double", "float", "char", "bool", "void", "auto", "signed",
+        "unsigned", "short", "main", "true", "false", "include", "define"
+    ]
 
     // MARK: - Pulling a model
 
