@@ -602,6 +602,12 @@ final class SelfTestRunner {
     private func snapshot(named name: String) {
         guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
               let view = window.contentView else { return }
+        // Highlighting is debounced by 60 ms, so a snapshot taken straight after
+        // an edit captured the editor *before* any colours were applied — the
+        // PNGs looked like the editor had lost syntax highlighting entirely.
+        for document in AppState.shared.documents {
+            document.engine.highlighter.highlightNow()
+        }
         window.displayIfNeeded()
         guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
         view.cacheDisplay(in: view.bounds, to: rep)

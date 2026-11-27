@@ -68,6 +68,11 @@ public final class EditorEngine {
             self?.highlighter.highlightNow()
             self?.textView.needsDisplay = true
         }
+        // Removing a diagnostic also strips the syntax colour from its
+        // characters, so they have to be highlighted again.
+        textView.onDiagnosticsCleared = { [weak self] in
+            self?.highlighter.highlightNow()
+        }
 
         // `NSText.didChangeNotification` is posted by AppKit for every text
         // change (typing, pasting, programmatic `didChangeText()`), which is the
@@ -76,6 +81,25 @@ public final class EditorEngine {
                                                selector: #selector(textStorageDidChange(_:)),
                                                name: NSText.didChangeNotification,
                                                object: textView)
+
+        // `didChangeNotification` is only posted when `didChangeText()` runs.
+        // Assigning `textView.string` (which is how a document is reloaded, and
+        // how several editing paths — IME commits, replaced ranges — reach the
+        // storage) never posts it, so those edits left the editor with no syntax
+        // colours at all: plain white text on a dark background. Watching the
+        // storage itself catches every mutation, whoever made it.
+        NotificationCenter.default.addObserver(self,
+                                               selector: #selector(textStorageEdited(_:)),
+                                               name: NSTextStorage.didProcessEditingNotification,
+                                               object: textView.textStorage)
+    }
+
+    /// Re-highlights after the storage itself changed.
+    @objc private func textStorageEdited(_ notification: Notification) {
+        // Already handled by `textStorageDidChange` when AppKit also posted the
+        // text notification; re-running is cheap (debounced) but the ruler and
+        // dirty state must not be processed twice per keystroke.
+        highlighter.scheduleHighlight()
     }
 
     @objc private func textStorageDidChange(_ notification: Notification) {

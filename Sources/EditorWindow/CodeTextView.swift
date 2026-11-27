@@ -30,6 +30,10 @@ public final class CodeTextView: NSTextView {
     /// does not recurse.
     private var isApplyingInternalEdit = false
 
+    /// Called after diagnostic attributes were removed, so the owner can repaint
+    /// syntax colours on the affected characters.
+    public var onDiagnosticsCleared: (() -> Void)?
+
     /// Called whenever the text changed, whatever caused it.
     ///
     /// This is the single hook AppKit gives for every kind of edit — typing,
@@ -802,13 +806,23 @@ public final class CodeTextView: NSTextView {
     /// Uses temporary attributes, so the marks never enter the text storage, never
     /// trigger undo, and never get saved into the file.
     public func setDiagnostics(_ items: [InlineDiagnostic]) {
+        let previous = diagnostics
         diagnostics = items
         guard let layoutManager else { return }
         let ns = string as NSString
         let full = NSRange(location: 0, length: ns.length)
-        for key in Self.diagnosticAttributeKeys {
-            layoutManager.removeTemporaryAttribute(key, forCharacterRange: full)
+        // Clear only where the *previous* diagnostics were. Clearing the whole
+        // document removed `.foregroundColor` everywhere, and that attribute is
+        // owned by syntax highlighting — so every time clangd reported a clean
+        // file (an empty list) the text went back to plain white.
+        for item in previous {
+            let clamped = NSIntersectionRange(item.range, full)
+            guard clamped.length > 0 else { continue }
+            layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: clamped)
+            layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: clamped)
         }
+        // Syntax colours were just removed from those ranges too, so repaint them.
+        if !previous.isEmpty { scheduleRehighlight() }
         for item in items {
             // Clamp: the server reports ranges against the text it last saw, which
             // can be one edit behind ours.
@@ -824,12 +838,6 @@ public final class CodeTextView: NSTextView {
         }
         refreshGutterMarkers()
     }
-
-    /// Attributes this view owns, so they can be cleared without touching syntax
-    /// highlighting (which uses the same temporary-attribute mechanism).
-    static let diagnosticAttributeKeys: [NSAttributedString.Key] = [
-        .underlineColor, .underlineStyle, .backgroundColor, .foregroundColor
-    ]
 
     /// Recolors the view when the system switches between light and dark.
     ///
@@ -859,12 +867,17 @@ public final class CodeTextView: NSTextView {
 
     /// Removes every inline diagnostic.
     public func clearErrorMarkers() {
+        let previous = diagnostics
         diagnostics = []
         guard let layoutManager else { return }
         let full = NSRange(location: 0, length: (string as NSString).length)
-        for key in Self.diagnosticAttributeKeys {
-            layoutManager.removeTemporaryAttribute(key, forCharacterRange: full)
+        for item in previous {
+            let clamped = NSIntersectionRange(item.range, full)
+            guard clamped.length > 0 else { continue }
+            layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: clamped)
+            layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: clamped)
         }
+        if !previous.isEmpty { scheduleRehighlight() }
         refreshGutterMarkers()
     }
 
@@ -1112,6 +1125,17 @@ class HoverTrackingView: NSView {
 // MARK: - Squiggles
 
 extension CodeTextView {
+/// Repaints syntax colours after diagnostics were removed from a range.
+///
+/// Removing `.foregroundColor` from a diagnostic's characters also strips the
+/// syntax colour they had, so the range has to be highlighted again or it
+/// stays in the plain text colour.
+private func scheduleRehighlight() {
+    DispatchQueue.main.async { [weak self] in
+        self?.onDiagnosticsCleared?()
+    }
+}
+
 /// Paints the wavy underlines.
 ///
 /// Kept as a static helper so the view body stays within the lint budget.
