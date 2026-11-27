@@ -1070,10 +1070,16 @@ public var canFixDiagnostic: Bool {
 public func fixDiagnosticAtCaret() {
     guard let document = selectedDocument, let provider = semanticProvider else { return }
     let tv = document.engine.textView
-    guard let inline = tv.diagnostic(at: tv.selectedRange().location) else {
+    // With no diagnostic under the caret, jump to the nearest one and fix that:
+    // requiring the user to first park the caret exactly on the squiggle made the
+    // shortcut as fiddly as the mouse path it was meant to replace.
+    guard let inline = tv.diagnostic(at: tv.selectedRange().location) ?? nearestDiagnostic(in: tv) else {
         statusText = L10n.t("status.noFixHere")
         return
     }
+    tv.setSelectedRange(NSRange(location: inline.range.location, length: 0))
+    tv.goTo(line: lineNumber(of: inline.range.location, in: document.text),
+            column: 1, highlightError: false)
     // Match the editor's underline back to the server diagnostic, which is
     // what `textDocument/codeAction` expects in its context.
     guard let diagnostic = liveDiagnostics.first(where: {
@@ -1115,4 +1121,22 @@ func applyFix(for target: CodeTextView.DiagnosticFixTarget, in document: Documen
         self.apply(codeAction: action, to: document)
     }
 }
+
+    /// The diagnostic closest to the caret, preferring one after it.
+    private func nearestDiagnostic(in textView: CodeTextView) -> CodeTextView.InlineDiagnostic? {
+        let caret = textView.selectedRange().location
+        let all = textView.diagnosticsForTesting
+        guard !all.isEmpty else { return nil }
+        let after = all.filter { $0.range.location >= caret }
+            .min { $0.range.location < $1.range.location }
+        if let after { return after }
+        return all.max { $0.range.location < $1.range.location }
+    }
+
+    /// 1-based line number of a character offset.
+    private func lineNumber(of offset: Int, in text: String) -> Int {
+        let ns = text as NSString
+        let clamped = min(max(0, offset), ns.length)
+        return ns.substring(to: clamped).components(separatedBy: "\n").count
+    }
 }

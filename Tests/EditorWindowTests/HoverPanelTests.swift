@@ -138,4 +138,58 @@ final class HoverPanelTests: XCTestCase {
     func testCompletionPanelHidesWhenAppDeactivates() {
         XCTAssertTrue(CompletionPanel().hidesOnDeactivate)
     }
+
+    /// Reaching the button is a fast gesture. At 100 Hz the pointer jumps several
+    /// points per frame, so it can clip the panel's edge on the way; a dismissal
+    /// on that first exit makes the button effectively unhittable.
+    func testPanelSurvivesAPointerThatGrazesItsEdge() {
+        let (engine, window) = makeWindow()
+        let range = errorRange()
+        engine.textView.setDiagnostics([.init(range: range, kind: .error, message: "m", code: "c")])
+        hover(range.location, in: engine, window: window)
+        XCTAssertEqual(visiblePanels.count, 1)
+
+        // Pointer left the panel a moment ago and has not arrived back yet.
+        engine.textView.scheduleHoverClose()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+        XCTAssertEqual(visiblePanels.count, 1, "a brief exit must not dismiss the panel at once")
+
+        // It lands on the panel before the grace period runs out.
+        engine.textView.isPointerOnHoverPanel = true
+        engine.textView.cancelHoverClose()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+        XCTAssertEqual(visiblePanels.count, 1, "landing on the panel must keep it open")
+
+        engine.textView.isPointerOnHoverPanel = false
+        engine.textView.hideHover()
+    }
+
+    /// There must be no dead strip between the code and the panel: the pointer
+    /// crossing it belongs to neither, and the panel would close mid-journey.
+    func testNoGapBetweenLineAndPanel() {
+        let (engine, window) = makeWindow()
+        let range = errorRange()
+        engine.textView.setDiagnostics([.init(range: range, kind: .error, message: "m", code: "c")])
+        hover(range.location, in: engine, window: window)
+        guard let panel = visiblePanels.first else {
+            return XCTFail("expected a panel")
+        }
+        let lineBottom = engine.textView.firstRect(forCharacterRange: range, actualRange: nil).minY
+        XCTAssertEqual(lineBottom, panel.frame.maxY, accuracy: 1.5,
+                       "the panel must butt against the line, not float below it")
+        engine.textView.hideHover()
+    }
+
+    func testLeavingForGoodEventuallyCloses() {
+        let (engine, window) = makeWindow()
+        let range = errorRange()
+        engine.textView.setDiagnostics([.init(range: range, kind: .error, message: "m", code: "c")])
+        hover(range.location, in: engine, window: window)
+        XCTAssertEqual(visiblePanels.count, 1)
+        engine.textView.isPointerOnHoverPanel = false
+        engine.textView.scheduleHoverClose()
+        // Well past the grace period, with the pointer nowhere near a problem.
+        RunLoop.current.run(until: Date().addingTimeInterval(CodeTextView.hoverCloseGrace + 0.4))
+        XCTAssertTrue(visiblePanels.isEmpty, "the panel must not linger forever")
+    }
 }

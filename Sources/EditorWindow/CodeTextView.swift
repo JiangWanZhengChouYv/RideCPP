@@ -65,7 +65,9 @@ public final class CodeTextView: NSTextView {
     /// Floating hover hint, if one is visible.
     private var hoverPanel: HoverPanel?
     /// True while the pointer rests on the hover panel itself (over its button).
-    var isPointerOnHoverPanel = false
+    public var isPointerOnHoverPanel = false
+    /// Pending dismissal after the pointer left the panel.
+    var pendingHoverClose: DispatchWorkItem?
 
     /// Whether the completion list opens automatically while typing.
     public var autoCompletionEnabled = true
@@ -732,11 +734,17 @@ public final class CodeTextView: NSTextView {
         content.onPointerInside = { [weak self] inside in
             guard let self else { return }
             self.isPointerOnHoverPanel = inside
-            // Leaving the panel without returning to a problem closes it, so it
-            // cannot linger over code the user has moved on from. The pointer's
-            // next move inside the text view reopens it if it lands on a
-            // diagnostic.
-            if !inside { self.hideHoverIfPointerNotOverDiagnostic() }
+            if inside {
+                // Back on the panel: cancel a pending dismissal. The pointer often
+                // clips the edge on its way to the button.
+                self.cancelHoverClose()
+                return
+            }
+            // Leaving does not close immediately. Crossing from the code to the
+            // button is a fast gesture — at 100 Hz the pointer jumps several
+            // points per frame — and a hairline exit in between would dismiss the
+            // panel the user is aiming at. Give them time to land on it.
+            self.scheduleHoverClose()
         }
         panel.isFloatingPanel = true
         // Above the editor, but not above other applications: a hover hint that
@@ -764,7 +772,11 @@ public final class CodeTextView: NSTextView {
             if let screen = window.screen {
                 x = min(x, screen.visibleFrame.maxX - width - 4)
             }
-            panel.setFrameOrigin(NSPoint(x: x, y: onScreen.minY - height - 2))
+            // Butt the panel against the line with no gap. A 2 pt strip between
+            // the code and the panel is a dead zone: the pointer crosses it while
+            // travelling to the button, stops being over either one, and the
+            // panel closes out from under the click.
+            panel.setFrameOrigin(NSPoint(x: x, y: onScreen.minY - height))
         }
         panel.orderFront(nil)
         hoverPanel = panel
@@ -778,23 +790,14 @@ public final class CodeTextView: NSTextView {
 
     /// Closes the hover hint.
     public func hideHover() {
+        cancelHoverClose()
         hoverPanel?.orderOut(nil)
         hoverPanel = nil
         isPointerOnHoverPanel = false
     }
 
-    /// Closes the panel unless the pointer is back over a problem.
-    func hideHoverIfPointerNotOverDiagnostic() {
-        guard let window else { return hideHover() }
-        let inWindow = window.mouseLocationOutsideOfEventStream
-        let point = convert(inWindow, from: nil)
-        // Outside the view entirely: nothing to keep the panel for.
-        guard bounds.contains(point), let index = characterOffset(atPoint: point),
-              diagnostic(at: index) != nil else {
-            hideHover()
-            return
-        }
-    }
+    /// How long the panel survives after the pointer leaves it.
+    static let hoverCloseGrace: TimeInterval = 0.45
 
     /// Message for the diagnostic under `location`, for a tooltip.
     public func diagnostic(at location: Int) -> InlineDiagnostic? {
@@ -1006,121 +1009,6 @@ public final class CodeTextView: NSTextView {
     }
 }
 
-/// Contents of the hover hint: the message, plus a fix button when clangd has
-/// one to offer.
-///
-/// Written as a view rather than a plain text field because the message alone
-/// left "fix this" reachable only through a menu shortcut, which nobody would
-/// find while already pointing at the problem.
-final class HoverContentView: HoverTrackingView {
-
-    var onAction: (() -> Void)?
-
-    private let label: NSTextField
-    private let button: NSButton?
-    private let width: CGFloat
-    private let padding: CGFloat = 8
-    private let spacing: CGFloat = 8
-    private let buttonHeight: CGFloat = 20
-
-    init(text: String, width: CGFloat, actionTitle: String?) {
-        self.width = width
-        label = NSTextField(wrappingLabelWithString: text)
-        button = actionTitle.map { NSButton(title: $0, target: nil, action: nil) }
-        super.init(frame: .zero)
-
-        label.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        label.textColor = .labelColor
-        label.drawsBackground = false
-        label.isEditable = false
-        label.isSelectable = false
-        label.preferredMaxLayoutWidth = width - padding * 2
-        addSubview(label)
-
-        if let button {
-            // A bordered control reads as clickable; a link style would be easy to
-            // miss against code.
-            button.bezelStyle = .rounded
-            button.controlSize = .small
-            button.font = .systemFont(ofSize: 11)
-            button.target = self
-            button.action = #selector(fixTapped)
-            addSubview(button)
-        }
-    }
-
-    required init?(coder: NSCoder) { fatalError("not used") }
-
-    @objc private func fixTapped() {
-        onAction?()
-    }
-
-    /// Height that fits the message and, when present, the button row.
-    var fittingHeight: CGFloat {
-        let textHeight = label.sizeThatFits(NSSize(width: width - padding * 2, height: 10_000)).height
-        let row = button == nil ? 0 : buttonHeight + spacing - 2
-        return ceil(max(24, textHeight + padding * 2 + row))
-    }
-
-    override func layout() {
-        super.layout()
-        let innerWidth = width - padding * 2
-        let textHeight = label.sizeThatFits(NSSize(width: innerWidth, height: 10_000)).height
-        // AppKit's origin is bottom-left, so the button sits at the bottom and the
-        // message above it.
-        var textBottom = padding
-        if let button {
-            let buttonWidth = min(innerWidth, max(72, button.intrinsicContentSize.width + 16))
-            button.frame = NSRect(x: padding, y: padding, width: buttonWidth, height: buttonHeight)
-            textBottom = padding + buttonHeight + spacing - 2
-        }
-        label.frame = NSRect(x: padding, y: textBottom, width: innerWidth, height: textHeight)
-    }
-}
-
-/// Hover panel that reports when the pointer is inside it.
-///
-/// The message is not the only thing to click any more: a pointer travelling to
-/// the fix button leaves the diagnostic's range, which would otherwise replace
-/// the panel out from under the button.
-final class HoverPanel: NSPanel {
-    /// Called when the pointer enters or leaves the panel.
-    var onPointerInside: ((Bool) -> Void)?
-
-    private var trackingArea: NSTrackingArea?
-
-    override var canBecomeKey: Bool { false }
-    override var canBecomeMain: Bool { false }
-
-}
-
-/// Reports pointer entry and exit for the hover panel's window.
-///
-/// Tracking areas belong to views, not windows, so this sits on the content view
-/// and forwards the two events the panel cares about.
-class HoverTrackingView: NSView {
-    var onPointerInside: ((Bool) -> Void)?
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        for area in trackingAreas where area.owner === self {
-            removeTrackingArea(area)
-        }
-        addTrackingArea(NSTrackingArea(rect: .zero,
-                                       options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-                                       owner: self, userInfo: nil))
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        super.mouseEntered(with: event)
-        onPointerInside?(true)
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        super.mouseExited(with: event)
-        onPointerInside?(false)
-    }
-}
 
 // MARK: - Squiggles
 
@@ -1180,6 +1068,43 @@ static func drawDiagnosticSquiggles(in textView: CodeTextView, dirtyRect: NSRect
             }
             path.stroke()
         }
+    }
+}
+}
+
+// MARK: - Dismissing the hover panel
+
+extension CodeTextView {
+/// Arms a dismissal after the pointer leaves the panel.
+///
+/// Not immediate: the trip from the code to the button is fast, and a
+/// hairline exit between the two would dismiss the thing being aimed at.
+public func scheduleHoverClose() {
+    cancelHoverClose()
+    let work = DispatchWorkItem { [weak self] in
+        guard let self, !self.isPointerOnHoverPanel else { return }
+        self.hideHoverIfPointerNotOverDiagnostic()
+    }
+    pendingHoverClose = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + Self.hoverCloseGrace, execute: work)
+}
+
+/// Cancels a pending dismissal (the pointer came back).
+public func cancelHoverClose() {
+    pendingHoverClose?.cancel()
+    pendingHoverClose = nil
+}
+
+/// Closes the panel unless the pointer is back over a problem.
+public func hideHoverIfPointerNotOverDiagnostic() {
+    guard let window else { return hideHover() }
+    let inWindow = window.mouseLocationOutsideOfEventStream
+    let point = convert(inWindow, from: nil)
+    // Outside the view entirely: nothing to keep the panel for.
+    guard bounds.contains(point), let index = characterOffset(atPoint: point),
+          diagnostic(at: index) != nil else {
+        hideHover()
+        return
     }
 }
 }
