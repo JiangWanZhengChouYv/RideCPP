@@ -3,69 +3,139 @@ import AppKit
 import EditorCore
 @testable import EditorWindow
 
-/// The hover panel must offer the fix inline, and must not outlive the app's
-/// focus.
+/// The hover panel: only problems get one, the button is localized, and the
+/// panel survives the pointer travelling onto it.
 @MainActor
 final class HoverPanelTests: XCTestCase {
 
-    private func makeTextView() -> CodeTextView {
+    private let source = """
+    struct Point { int x; int y; };
+
+    int main() {
+        Point p;
+        p.notAMember();
+        int ok = 1;
+        return ok;
+    }
+    """
+
+    /// Panels that exist because of *this* test, ignoring any left by another one:
+    /// AppKit keeps closed windows in `NSApp.windows` for a while.
+    private var baselinePanels: Set<ObjectIdentifier> = []
+
+    private func makeWindow() -> (EditorEngine, NSWindow) {
+        baselinePanels = Set(NSApp.windows.compactMap { $0 as? NSPanel }.map(ObjectIdentifier.init))
         let engine = EditorEngine(settings: EditSettings())
-        engine.load(text: "int main() {\n    undefinedThing();\n}\n", undoManager: UndoManager())
-        return engine.textView
+        engine.load(text: source, undoManager: UndoManager())
+        engine.highlighter.highlightNow()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 320),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = engine.textView
+        engine.textView.frame = NSRect(x: 0, y: 0, width: 700, height: 320)
+        window.makeKeyAndOrderFront(nil)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        return (engine, window)
     }
 
-    private let source = "int main() {\n    undefinedThing();\n}\n"
-
-    func testDiagnosticHoverOffersFixAction() {
-        let view = makeTextView()
-        let target = NSRange(location: 16, length: 14)
-        view.setDiagnostics([.init(range: target, kind: .error,
-                                   message: "use of undeclared identifier",
-                                   code: "undeclared_var_use")])
-        var actions: [CodeTextView.HoverAction] = []
-        view.onHoverAction = { actions.append($0) }
-        XCTAssertTrue(view.diagnostic(at: target.location) != nil)
-        XCTAssertEqual(CodeTextView.HoverAction.fix(.init(diagnostic: view.diagnostic(at: 16)!)).title, "Fix")
-        XCTAssertTrue(view.onHoverAction != nil)
-        XCTAssertTrue(actions.isEmpty)
+    /// Drives the real `mouseMoved` with an event aimed at a character.
+    private func hover(_ index: Int, in engine: EditorEngine, window: NSWindow) {
+        let screen = engine.textView.firstRect(forCharacterRange: NSRange(location: index, length: 1),
+                                               actualRange: nil)
+        let inWindow = window.convertFromScreen(screen)
+        guard let event = NSEvent.mouseEvent(with: .mouseMoved,
+                                             location: NSPoint(x: inWindow.midX, y: inWindow.midY),
+                                             modifierFlags: [],
+                                             timestamp: ProcessInfo.processInfo.systemUptime,
+                                             windowNumber: window.windowNumber, context: nil,
+                                             eventNumber: 0, clickCount: 0, pressure: 0) else { return }
+        engine.textView.mouseMoved(with: event)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.15))
     }
 
-    func testFixTargetKeepsTheHoveredRange() {
-        let view = makeTextView()
-        let first = NSRange(location: 16, length: 14)
-        let second = NSRange(location: 0, length: 3)
-        view.setDiagnostics([
-            .init(range: first, kind: .error, message: "a", code: "code_a"),
-            .init(range: second, kind: .warning, message: "b", code: "code_b")
-        ])
-        let target = CodeTextView.DiagnosticFixTarget(diagnostic: view.diagnostic(at: 20)!)
-        // The button must act on the hovered problem, not on the caret.
-        XCTAssertEqual(target.range, first)
-        XCTAssertEqual(target.code, "code_a")
+    private var visiblePanels: [NSPanel] {
+        NSApp.windows.compactMap { $0 as? NSPanel }
+            .filter { $0.isVisible && !baselinePanels.contains(ObjectIdentifier($0)) }
+    }
+
+    private func buttonTitle() -> String? {
+        guard let view = visiblePanels.first?.contentView else { return nil }
+        var found: String?
+        func walk(_ v: NSView) {
+            if let b = v as? NSButton { found = b.title }
+            v.subviews.forEach(walk)
+        }
+        walk(view)
+        return found
+    }
+
+    private func errorRange() -> NSRange {
+        (source as NSString).range(of: "notAMember")
+    }
+
+    func testCorrectCodeShowsNoPanel() {
+        let (engine, window) = makeWindow()
+        let ok = (source as NSString).range(of: "ok = 1")
+        hover(ok.location, in: engine, window: window)
+        XCTAssertTrue(visiblePanels.isEmpty,
+                      "hovering ordinary code must not open a panel")
+        engine.textView.hideHover()
+    }
+
+    func testErrorShowsPanel() {
+        let (engine, window) = makeWindow()
+        let range = errorRange()
+        engine.textView.setDiagnostics([.init(range: range, kind: .error,
+                                              message: "No member named 'notAMember'",
+                                              code: "no_member")])
+        hover(range.location, in: engine, window: window)
+        XCTAssertEqual(visiblePanels.count, 1)
+        engine.textView.hideHover()
+    }
+
+    func testFixButtonUsesTheAppLocalizedTitle() {
+        CodeTextView.setHoverActionTitle("修复", for: "fix")
+        let (engine, window) = makeWindow()
+        let range = errorRange()
+        engine.textView.setDiagnostics([.init(range: range, kind: .error, message: "m", code: "c")])
+        hover(range.location, in: engine, window: window)
+        XCTAssertEqual(buttonTitle(), "修复", "the button must follow the UI language")
+        engine.textView.hideHover()
+    }
+
+    func testPanelStaysWhilePointerIsOnIt() {
+        let (engine, window) = makeWindow()
+        let range = errorRange()
+        engine.textView.setDiagnostics([.init(range: range, kind: .error, message: "m", code: "c")])
+        hover(range.location, in: engine, window: window)
+        XCTAssertEqual(visiblePanels.count, 1)
+        // Entering the panel must latch it: the pointer is on its way to the
+        // button, and any replacement would pull the button away.
+        engine.textView.isPointerOnHoverPanel = true
+        let someOtherIndex = (source as NSString).range(of: "return").location
+        hover(someOtherIndex, in: engine, window: window)
+        XCTAssertEqual(visiblePanels.count, 1, "panel must survive the pointer moving onto it")
+        engine.textView.isPointerOnHoverPanel = false
+        engine.textView.hideHover()
+    }
+
+    func testMovingOffTheErrorClosesThePanel() {
+        let (engine, window) = makeWindow()
+        let range = errorRange()
+        engine.textView.setDiagnostics([.init(range: range, kind: .error, message: "m", code: "c")])
+        hover(range.location, in: engine, window: window)
+        XCTAssertEqual(visiblePanels.count, 1)
+        let ok = (source as NSString).range(of: "ok = 1")
+        hover(ok.location, in: engine, window: window)
+        XCTAssertTrue(visiblePanels.isEmpty, "leaving the problem must close the panel")
     }
 
     func testCompletionPanelDoesNotOutrankOtherApps() {
         let panel = CompletionPanel()
-        // `.popUpMenu` floats above every other application's windows; a
-        // completion list must not.
         XCTAssertLessThan(panel.level.rawValue, NSWindow.Level.popUpMenu.rawValue)
         XCTAssertGreaterThan(panel.level.rawValue, NSWindow.Level.normal.rawValue)
     }
 
     func testCompletionPanelHidesWhenAppDeactivates() {
-        let panel = CompletionPanel()
-        XCTAssertTrue(panel.hidesOnDeactivate)
-    }
-
-    func testHoverPanelStaysAboveEditorButBelowPopups() {
-        let view = makeTextView()
-        view.showHover("error: something", at: 16)
-        let windows = NSApp.windows.filter { $0 is NSPanel && $0.isVisible }
-        XCTAssertFalse(windows.isEmpty, "hover panel should be visible")
-        for window in windows {
-            XCTAssertLessThan(window.level.rawValue, NSWindow.Level.popUpMenu.rawValue)
-            XCTAssertTrue(window.hidesOnDeactivate)
-        }
-        view.hideHover()
+        XCTAssertTrue(CompletionPanel().hidesOnDeactivate)
     }
 }

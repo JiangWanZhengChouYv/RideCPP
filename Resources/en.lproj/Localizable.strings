@@ -186,3 +186,5 @@
 "edit.fixDiagnostic" = "Fix Issue";
 "status.noFixHere" = "Place the cursor on a highlighted problem first";
 "status.noFixAvailable" = "clangd has no automatic fix for this problem";
+
+"hover.fix" = "Fix";

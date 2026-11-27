@@ -62,6 +62,12 @@ public final class EditorEngine {
             self?.ruler.needsDisplay = true
             self?.onCaretChange?()
         }
+        // Temporary attributes hold resolved colours, so a light/dark switch has
+        // to rebuild them or the editor keeps the previous palette.
+        textView.onAppearanceChange = { [weak self] in
+            self?.highlighter.highlightNow()
+            self?.textView.needsDisplay = true
+        }
 
         // `NSText.didChangeNotification` is posted by AppKit for every text
         // change (typing, pasting, programmatic `didChangeText()`), which is the

@@ -186,3 +186,5 @@
 "edit.fixDiagnostic" = "修复问题";
 "status.noFixHere" = "请先把光标放在标红的位置上";
 "status.noFixAvailable" = "clangd 没有针对该问题的自动修复";
+
+"hover.fix" = "修复";

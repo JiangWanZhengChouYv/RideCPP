@@ -50,8 +50,6 @@ public final class CodeTextView: NSTextView {
         onDocumentSync?(self.string, documentFileURL)
     }
 
-    /// Asks for a hover query at a character offset (set by the app).
-    public var onHoverQuery: ((Int) -> Void)?
     /// Called when a button inside the hover panel is clicked.
     public var onHoverAction: ((HoverAction) -> Void)?
     /// Called after every edit so a semantic provider can keep its server in sync.
@@ -64,11 +62,6 @@ public final class CodeTextView: NSTextView {
     private var hoverPanel: HoverPanel?
     /// True while the pointer rests on the hover panel itself (over its button).
     var isPointerOnHoverPanel = false
-    /// Queued documentation query, cancelled when the pointer moves on.
-    private var pendingHoverWorkItem: DispatchWorkItem?
-    /// Offset the last documentation query was made for, so resting on one
-    /// character does not keep re-asking clangd.
-    private var lastQueriedHoverIndex: Int?
 
     /// Whether the completion list opens automatically while typing.
     public var autoCompletionEnabled = true
@@ -630,13 +623,23 @@ public final class CodeTextView: NSTextView {
 
         /// Text on the button that triggers this action.
         ///
-        /// Supplied here rather than looked up in the view: `EditorWindow` sits
-        /// below the app layer, so it has no access to the localization table.
+        /// Supplied by the app layer: `EditorWindow` sits below it and cannot read
+        /// the localization table, and a hard-coded English label stayed English
+        /// in a Chinese UI.
+        /// Localized label registered by the app layer for this action.
         var title: String {
             switch self {
-            case .fix: return "Fix"
+            case .fix: return CodeTextView.hoverActionTitles["fix"] ?? "Fix"
             }
         }
+    }
+
+    /// Localized button labels for the hover panel, set by the app at launch.
+    static private(set) var hoverActionTitles: [String: String] = [:]
+
+    /// Registers the localized label shown for an action.
+    public static func setHoverActionTitle(_ title: String, for action: String) {
+        hoverActionTitles[action] = title
     }
 
     /// The diagnostic a hover button acts on.
@@ -667,56 +670,27 @@ public final class CodeTextView: NSTextView {
 
     public override func mouseMoved(with event: NSEvent) {
         super.mouseMoved(with: event)
-        guard let onHoverQuery else { return }
         let point = convert(event.locationInWindow, from: nil)
-        guard let index = characterIndex(at: point) else {
-            cancelPendingHover()
+        guard let index = characterOffset(atPoint: point) else {
+            if !isPointerOnHoverPanel { hideHover() }
             return
         }
         // While the pointer is on the panel, leave it alone: it is on its way to
         // the fix button, and replacing it would pull the button away.
         guard !isPointerOnHoverPanel else { return }
-        // Over a squiggle the diagnostic is the answer; asking clangd would only
-        // add latency and, on code that does not parse, return nothing useful.
-        if let diagnostic = diagnostic(at: index) {
-            cancelPendingHover()
-            showHover(diagnostic.hoverText, at: index, kind: diagnostic.kind,
-                      action: .fix(DiagnosticFixTarget(diagnostic: diagnostic)))
+        // Only problems get a panel. Hovering ordinary code used to fetch
+        // documentation from clangd for every identifier, which was both slow and
+        // noisy: a floating box over code the user was merely reading.
+        guard let diagnostic = diagnostic(at: index) else {
+            hideHover()
             return
         }
-        // Documentation comes from clangd and takes a round trip. Asking on every
-        // mouse move queued a request per pixel, so the answer arrived a second or
-        // more late, and the panel would appear long after the pointer moved on.
-        // Wait for the pointer to settle first; the squiggle path above stays
-        // instant because it needs no server.
-        guard index != lastQueriedHoverIndex else { return }
-        scheduleHoverQuery(at: index, handler: onHoverQuery)
+        showHover(diagnostic.hoverText, at: index, kind: diagnostic.kind,
+                  action: .fix(DiagnosticFixTarget(diagnostic: diagnostic)))
     }
 
-    /// Waits for the pointer to stop moving before asking clangd for documentation.
-    private func scheduleHoverQuery(at index: Int, handler: @escaping (Int) -> Void) {
-        pendingHoverWorkItem?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.lastQueriedHoverIndex = index
-            handler(index)
-        }
-        pendingHoverWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.hoverSettleDelay, execute: work)
-    }
-
-    /// Cancels a queued documentation query (the pointer moved or left a squiggle).
-    private func cancelPendingHover() {
-        pendingHoverWorkItem?.cancel()
-        pendingHoverWorkItem = nil
-        lastQueriedHoverIndex = nil
-    }
-
-    /// How long the pointer must rest before documentation is requested.
-    static let hoverSettleDelay: TimeInterval = 0.25
-
-    /// Character offset under a point, or nil when the point is past the text.
-    private func characterIndex(at point: NSPoint) -> Int? {
+    /// Character offset under a point in view coordinates, or nil past the text.
+    public func characterOffset(atPoint point: NSPoint) -> Int? {
         guard let layoutManager, let container = textContainer else { return nil }
         let inContainer = NSPoint(x: point.x - textContainerInset.width,
                                   y: point.y - textContainerInset.height)
@@ -752,7 +726,13 @@ public final class CodeTextView: NSTextView {
                                styleMask: [.borderless, .nonactivatingPanel],
                                backing: .buffered, defer: false)
         content.onPointerInside = { [weak self] inside in
-            self?.isPointerOnHoverPanel = inside
+            guard let self else { return }
+            self.isPointerOnHoverPanel = inside
+            // Leaving the panel without returning to a problem closes it, so it
+            // cannot linger over code the user has moved on from. The pointer's
+            // next move inside the text view reopens it if it lands on a
+            // diagnostic.
+            if !inside { self.hideHoverIfPointerNotOverDiagnostic() }
         }
         panel.isFloatingPanel = true
         // Above the editor, but not above other applications: a hover hint that
@@ -797,7 +777,19 @@ public final class CodeTextView: NSTextView {
         hoverPanel?.orderOut(nil)
         hoverPanel = nil
         isPointerOnHoverPanel = false
-        cancelPendingHover()
+    }
+
+    /// Closes the panel unless the pointer is back over a problem.
+    func hideHoverIfPointerNotOverDiagnostic() {
+        guard let window else { return hideHover() }
+        let inWindow = window.mouseLocationOutsideOfEventStream
+        let point = convert(inWindow, from: nil)
+        // Outside the view entirely: nothing to keep the panel for.
+        guard bounds.contains(point), let index = characterOffset(atPoint: point),
+              diagnostic(at: index) != nil else {
+            hideHover()
+            return
+        }
     }
 
     /// Message for the diagnostic under `location`, for a tooltip.
@@ -838,6 +830,26 @@ public final class CodeTextView: NSTextView {
     static let diagnosticAttributeKeys: [NSAttributedString.Key] = [
         .underlineColor, .underlineStyle, .backgroundColor, .foregroundColor
     ]
+
+    /// Recolors the view when the system switches between light and dark.
+    ///
+    /// The syntax colours are installed as *temporary* attributes, which hold
+    /// concrete `NSColor`s resolved when they were written. Switching appearance
+    /// therefore left the old palette in place — on a dark background white-ish
+    /// text looks like the highlighting simply stopped working. Re-running the
+    /// highlighter rebuilds every run against the new appearance.
+    public override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        backgroundColor = EditorTheme.background
+        textColor = EditorTheme.plainText
+        insertionPointColor = EditorTheme.cursor
+        selectedTextAttributes = [.backgroundColor: EditorTheme.selection]
+        onAppearanceChange?()
+    }
+
+    /// Called after the effective appearance changed, so the engine can repaint.
+    public var onAppearanceChange: (() -> Void)?
+
 
     /// Draws the squiggles; the drawing itself lives in an extension below.
     public override func draw(_ dirtyRect: NSRect) {

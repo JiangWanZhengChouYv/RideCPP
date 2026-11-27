@@ -374,6 +374,9 @@ public final class AppState: ObservableObject {
 
     /// Creates the clangd-backed provider and wires it to every open document.
     func configureSemanticCompletion() {
+        // The hover panel's buttons live in EditorWindow, which cannot read the
+        // localization table; hand it the translated labels.
+        CodeTextView.setHoverActionTitle(L10n.t("hover.fix"), for: "fix")
         let workspace = documents.first?.fileURL?.deletingLastPathComponent()
             ?? FileManager.default.temporaryDirectory
         guard let provider = SemanticCompletionProvider(
@@ -426,18 +429,11 @@ public final class AppState: ObservableObject {
         document.engine.textView.setDiagnostics(inline)
     }
 
-    /// Installs hover and go-to-definition on one document.
+    /// Installs the hover panel's fix button on one document.
+    ///
+    /// Only diagnostics produce a hover panel now, so there is no documentation
+    /// query to wire up: hovering ordinary code shows nothing.
     private func wireHoverAndNavigation(_ document: DocumentModel, provider: SemanticCompletionProvider) {
-        document.engine.textView.onHoverQuery = { [weak self, weak document] offset in
-            guard let self, let document else { return }
-            provider.hover(atUTCOffset: offset, in: document.text, fileURL: document.semanticURL) { text in
-                guard let text, !text.isEmpty else {
-                    document.engine.textView.hideHover()
-                    return
-                }
-                document.engine.textView.showHover(text, at: offset)
-            }
-        }
         // The fix button inside the hover panel.
         document.engine.textView.onHoverAction = { [weak self, weak document] action in
             guard let self, let document else { return }
