@@ -822,23 +822,19 @@ public final class CodeTextView: NSTextView {
     /// Uses temporary attributes, so the marks never enter the text storage, never
     /// trigger undo, and never get saved into the file.
     public func setDiagnostics(_ items: [InlineDiagnostic]) {
-        let previous = diagnostics
         diagnostics = items
         guard let layoutManager else { return }
         let ns = string as NSString
-        let full = NSRange(location: 0, length: ns.length)
-        // Clear only where the *previous* diagnostics were. Clearing the whole
-        // document removed `.foregroundColor` everywhere, and that attribute is
-        // owned by syntax highlighting — so every time clangd reported a clean
-        // file (an empty list) the text went back to plain white.
-        for item in previous {
-            let clamped = NSIntersectionRange(item.range, full)
-            guard clamped.length > 0 else { continue }
-            layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: clamped)
-            layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: clamped)
-        }
-        // Syntax colours were just removed from those ranges too, so repaint them.
-        if !previous.isEmpty { scheduleRehighlight() }
+        // Clear whatever is actually painted, not the ranges we remember.
+        //
+        // The remembered ranges are offsets into the text the server last saw.
+        // Once the user edits, those offsets point somewhere else, so removing
+        // "the previous ranges" left a red box behind on whichever character now
+        // occupied the old position — a mark that never went away.
+        let cleared = removePaintedMarkers(layoutManager: layoutManager, in: ns)
+        // Those characters also lost the syntax colour underneath the mark; put it
+        // back before painting the new ones, or they stay plain.
+        if cleared { scheduleRehighlight() }
         for item in items {
             // Clamp: the server reports ranges against the text it last saw, which
             // can be one edit behind ours.
@@ -904,17 +900,11 @@ public final class CodeTextView: NSTextView {
 
     /// Removes every inline diagnostic.
     public func clearErrorMarkers() {
-        let previous = diagnostics
         diagnostics = []
         guard let layoutManager else { return }
-        let full = NSRange(location: 0, length: (string as NSString).length)
-        for item in previous {
-            let clamped = NSIntersectionRange(item.range, full)
-            guard clamped.length > 0 else { continue }
-            layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: clamped)
-            layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: clamped)
-        }
-        if !previous.isEmpty { scheduleRehighlight() }
+        let cleared = removePaintedMarkers(layoutManager: layoutManager,
+                                           in: string as NSString)
+        if cleared { scheduleRehighlight() }
         refreshGutterMarkers()
     }
 
@@ -1027,6 +1017,51 @@ public final class CodeTextView: NSTextView {
 // MARK: - Squiggles
 
 extension CodeTextView {
+/// Strips every diagnostic attribute actually present in the text.
+///
+/// Positions are found by reading the layout manager rather than by trusting
+/// remembered offsets: those go stale the moment the text is edited, and a
+/// stale offset is exactly what leaves a red box on an innocent character.
+///
+/// Returns whether anything was removed, so the caller can repaint syntax
+/// colours over the holes.
+@discardableResult
+func removePaintedMarkers(layoutManager: NSLayoutManager, in ns: NSString) -> Bool {
+    let full = NSRange(location: 0, length: ns.length)
+    guard full.length > 0 else { return false }
+    // AppKit offers no enumerator for temporary attributes, so the painted
+    // spans are rebuilt by scanning and coalescing runs. This runs once per
+    // diagnostic update (a few times a second at most), over the visible
+    // text, which is cheap enough to avoid caching stale offsets.
+    var removed = false
+    var runStart: Int?
+    for index in 0...full.length {
+        let painted = index < full.length
+            && layoutManager.temporaryAttribute(.backgroundColor,
+                                                atCharacterIndex: index,
+                                                effectiveRange: nil) != nil
+        if painted, runStart == nil {
+            runStart = index
+        } else if !painted, let start = runStart {
+            let range = NSRange(location: start, length: index - start)
+            layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: range)
+            layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: range)
+            removed = true
+            runStart = nil
+        }
+    }
+    return removed
+}
+
+    /// Repaints syntax colours after diagnostics were removed.
+    ///
+    /// Removing `.foregroundColor` from a diagnostic's characters also strips the
+    /// syntax colour they had, so they have to be highlighted again or they stay
+    /// in the plain text colour.
+    private func scheduleRehighlight() {
+        onDiagnosticsCleared?()
+    }
+
 /// Re-applies the diagnostic text colours after syntax highlighting repainted
 /// the whole visible range.
 ///
@@ -1044,17 +1079,6 @@ func reapplyDiagnosticColors() {
             .foregroundColor,
             value: item.kind == .error ? EditorTheme.errorText : EditorTheme.warningText,
             forCharacterRange: clamped)
-    }
-}
-
-/// Repaints syntax colours after diagnostics were removed from a range.
-///
-/// Removing `.foregroundColor` from a diagnostic's characters also strips the
-/// syntax colour they had, so the range has to be highlighted again or it
-/// stays in the plain text colour.
-private func scheduleRehighlight() {
-    DispatchQueue.main.async { [weak self] in
-        self?.onDiagnosticsCleared?()
     }
 }
 

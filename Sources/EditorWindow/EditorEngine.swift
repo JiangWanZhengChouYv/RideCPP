@@ -71,6 +71,10 @@ public final class EditorEngine {
         // Removing a diagnostic also strips the syntax colour from its
         // characters, so they have to be highlighted again.
         textView.onDiagnosticsCleared = { [weak self] in
+            // Synchronous on purpose. `scheduleHighlight` is debounced, so the
+            // repaint could land after the next diagnostic had already painted its
+            // own colours — leaving the characters that just lost their error with
+            // no syntax colour at all.
             self?.highlighter.highlightNow()
         }
 

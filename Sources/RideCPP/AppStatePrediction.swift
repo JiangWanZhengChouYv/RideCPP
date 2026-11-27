@@ -72,8 +72,13 @@ public func pullInlineModel(progress: @escaping (Double?, String) -> Void,
               self.inlineSuggestionGeneration == generation,
               self.selectedDocument === document else { return }
         // Never overwrite something the user already accepted or typed past.
+        //
+        // Note the absence of a `hasSuggestion` check here: that required an
+        // offline suggestion to already exist, so turning the model on produced
+        // nothing whenever the predictor had no guess — which is most of the
+        // time. The model's answer is itself the suggestion in that case.
         let tv = document.engine.textView
-        guard tv.selectedRange().length == 0, document.engine.textView.hasSuggestion else { return }
+        guard tv.selectedRange().length == 0 else { return }
         tv.showSuggestion(text)
     }
 }

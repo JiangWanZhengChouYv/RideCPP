@@ -190,37 +190,79 @@ public final class OllamaClient {
                 completion("")
                 return
             }
-            completion(Self.sanitize(raw))
+            completion(Self.sanitize(raw, following: Self.trailingWord(in: prefix)))
         }
         task.resume()
+    }
+
+    /// The word being typed at the very end of `prefix`.
+    static func trailingWord(in prefix: String) -> String {
+        var word = ""
+        for character in prefix.reversed() {
+            if character.isLetter || character.isNumber || character == "_" {
+                word = String(character) + word
+            } else {
+                break
+            }
+        }
+        return word
     }
 
     /// Cleans a model continuation into something worth inserting.
     ///
     /// Small code models leak markdown fences and occasionally repeat the line
     /// they were continuing; both are stripped rather than shown.
-    static func sanitize(_ raw: String) -> String {
+    static func sanitize(_ raw: String, following typedWord: String = "") -> String {
         var text = raw
-        for marker in ["```c++", "```cpp", "```c", "```"] {
+        for marker in ["```cpp", "```c++", "```c", "```"] {
             text = text.replacingOccurrences(of: marker, with: "")
         }
-        // Keep the suggestion to the current line's worth of work.
-        if let newline = text.firstIndex(of: "\n") {
-            let firstLine = String(text[text.startIndex..<newline])
-            // A continuation may open a block; keep one trailing line of body when
-            // it clearly belongs (an opening brace with no closing one yet).
-            if firstLine.contains("{") && !firstLine.contains("}") {
-                let rest = text[text.index(after: newline)...]
-                if let closing = rest.firstIndex(of: "\n") {
-                    text = firstLine + "\n" + String(rest[rest.startIndex..<closing])
-                } else {
-                    text = firstLine + "\n" + rest
-                }
-            } else {
-                text = firstLine
+        // Leading newlines are common and would otherwise make the first line
+        // empty, silently discarding a good continuation. Only newlines are
+        // trimmed: a leading space is meaningful, since `for` followed by
+        // ` (int i...` must not become `for(int`.
+        while text.hasPrefix("\n") || text.hasPrefix("\r") {
+            text.removeFirst()
+        }
+        guard !text.isEmpty else { return "" }
+
+        // The continuation must extend what the user is typing rather than start
+        // a fresh statement. A model answering `wh` with `cout << n << endl;`
+        // would corrupt the line if inserted.
+        if !typedWord.isEmpty {
+            let typed = typedWord.trimmingCharacters(in: .whitespaces).lowercased()
+            let firstChunk = String(text.prefix { $0.isLetter || $0.isNumber || $0 == "_" })
+                .lowercased()
+            // A word continuation must agree with what has been typed: `wh` + `ile`
+            // is `while`, `vec` + `tor` is `vector`; `wh` + `cout` is a new word.
+            let continuesWord: Bool = {
+                guard !typed.isEmpty, !firstChunk.isEmpty else { return false }
+                let joined = typed + firstChunk
+                guard joined.count <= 40 else { return false }
+                // The typed letters and the continuation must form one identifier,
+                // and nothing may be retyped: `while` starts with `wh`, so `ile`
+                // follows; `cout` follows nothing.
+                return (firstChunk.hasPrefix(typed) && typed != firstChunk)
+                    || (typed.hasPrefix(firstChunk) && firstChunk != typed)
+            }()
+            let startsWithPunctuation = text.first.map {
+                "( <.[>;{: ,=+-*/%!&|?)".contains($0)
+            } ?? false
+            guard startsWithPunctuation || continuesWord else { return "" }
+        }
+
+        let lines = text.components(separatedBy: "\n")
+        let first = lines[0]
+        guard !first.isEmpty else { return "" }
+        // A continuation that opens a block usually reads better with the body's
+        // first line; anything longer starts to cover the code beneath.
+        if first.contains("{"), !first.contains("}"), lines.count > 1 {
+            let body = lines[1]
+            if !body.trimmingCharacters(in: .whitespaces).isEmpty {
+                return first + "\n" + body
             }
         }
-        return text.trimmingCharacters(in: .whitespaces)
+        return first
     }
 
     // MARK: - Pulling a model
