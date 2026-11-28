@@ -6,16 +6,25 @@ import EditorCore
 /// Main window contents: tabs on top, editor in the middle, output panel below.
 struct ContentView: View {
     @EnvironmentObject private var state: AppState
+    /// Observed directly: `find` is a separate ObservableObject, so changes to
+    /// its visibility do not reach a view that only observes `AppState`.
+    @ObservedObject private var find: FindModel
     @State private var outputHeight: CGFloat = 220
     @State private var sidebarVisible = true
     @State private var breadcrumbLine: Int?
+
+    init() {
+        // Seeded from the shared state; the environment object is not available
+        // inside an initializer.
+        _find = ObservedObject(wrappedValue: AppState.shared.find)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             TabStrip()
             Divider()
-            if state.find.isVisible {
-                FindBar(model: state.find)
+            if find.isVisible {
+                FindBar(model: find)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
             HStack(spacing: 0) {
