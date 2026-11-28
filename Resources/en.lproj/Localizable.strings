@@ -211,3 +211,20 @@
 
 "settings.prediction.model" = "Model";
 "settings.prediction.refreshModels" = "Refresh model list";
+
+"find.placeholder" = "Find";
+"find.replacePlaceholder" = "Replace with";
+"find.next" = "Find Next";
+"find.previous" = "Find Previous";
+"find.toggleReplace" = "Show Replace";
+"find.close" = "Close Find Bar";
+"find.caseSensitive" = "Match Case";
+"find.regex" = "Regular Expression";
+"find.wholeWord" = "Whole Word";
+"find.noMatches" = "No results";
+"find.matchCount" = "%1$d of %2$d";
+"find.invalidRegex" = "Invalid pattern";
+"find.replace" = "Replace";
+"find.replaceAll" = "Replace All";
+"find.menu.find" = "Find…";
+"find.menu.replace" = "Find and Replace…";

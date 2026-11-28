@@ -58,6 +58,15 @@ public enum EditorTheme {
                                                 light: NSColor.systemOrange.withAlphaComponent(0.22),
                                                 dark: NSColor.systemOrange.withAlphaComponent(0.32))
 
+    /// Background for every search match, and a stronger one for the selected
+    /// match. Translucent so the token underneath stays readable.
+    public static let findMatch = theme("findMatch",
+                                        light: NSColor.systemYellow.withAlphaComponent(0.35),
+                                        dark: NSColor.systemYellow.withAlphaComponent(0.30))
+    public static let findCurrentMatch = theme("findCurrentMatch",
+                                               light: NSColor.systemOrange.withAlphaComponent(0.55),
+                                               dark: NSColor.systemOrange.withAlphaComponent(0.50))
+
     /// Text colour for an offending token: red rather than the syntax colour, so
     /// the eye lands on it from across the line.
     public static let errorText = theme("errorText",

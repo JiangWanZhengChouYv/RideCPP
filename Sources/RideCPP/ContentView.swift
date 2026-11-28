@@ -14,6 +14,10 @@ struct ContentView: View {
         VStack(spacing: 0) {
             TabStrip()
             Divider()
+            if state.find.isVisible {
+                FindBar(model: state.find)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
             HStack(spacing: 0) {
                 if sidebarVisible, let document = state.selectedDocument {
                     SidebarView(document: document, selectedLine: $breadcrumbLine)

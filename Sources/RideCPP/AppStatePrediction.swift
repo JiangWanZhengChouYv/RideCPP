@@ -111,4 +111,12 @@ func saveDirtyDocuments() {
         _ = save(document: document)
     }
 }
+
+/// Shows the find bar, searching the focused document.
+public func showFind(replacing: Bool) {
+    guard let document = selectedDocument else { return }
+    find.documentProvider = { [weak self] in self?.selectedDocument }
+    _ = document
+    find.show(replacing: replacing)
+}
 }

@@ -345,6 +345,12 @@ public final class AppState: ObservableObject {
         return controller
     }()
 
+    /// Find and replace for the focused document.
+    ///
+    /// Created eagerly: the menu items need it before the find bar has ever been
+    /// shown, and it holds no document until asked.
+    @Published public internal(set) var find = FindModel()
+
     /// Bumped whenever the updater's state changes; see `updates`.
     @Published public private(set) var updateRevision = 0
     private var updateSubscription: AnyCancellable?

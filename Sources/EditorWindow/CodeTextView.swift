@@ -67,6 +67,8 @@ public final class CodeTextView: NSTextView {
     public var onDocumentSync: ((String, URL?) -> Void)?
     /// Inline diagnostics currently drawn.
     private var diagnostics: [InlineDiagnostic] = []
+    /// Character ranges currently painted as search matches.
+    var findHighlightRanges: [NSRange] = []
     /// Read-only view of the current underlines, for tests and diagnostics panels.
     public var diagnosticsForTesting: [InlineDiagnostic] { diagnostics }
     /// Floating hover hint, if one is visible.

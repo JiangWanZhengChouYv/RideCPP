@@ -71,6 +71,23 @@ struct AppCommands: Commands {
                 .disabled(!state.canRedo)
         }
 
+        // Find and replace. Placed after the undo/redo group so they sit where
+        // people expect them in the Edit menu.
+        CommandGroup(after: .undoRedo) {
+            Button(L10n.t("find.menu.find")) { state.showFind(replacing: false) }
+                .keyboardShortcut("f")
+                .disabled(state.selectedDocument == nil)
+            Button(L10n.t("find.menu.replace")) { state.showFind(replacing: true) }
+                .keyboardShortcut("f", modifiers: [.command, .option])
+                .disabled(state.selectedDocument == nil)
+            Button(L10n.t("find.next")) { state.find.findNext() }
+                .keyboardShortcut("g")
+                .disabled(!state.find.isVisible)
+            Button(L10n.t("find.previous")) { state.find.findPrevious() }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+                .disabled(!state.find.isVisible)
+        }
+
         CommandMenu(L10n.codeMenuTitle) {
             Button(L10n.t("edit.toggleComment")) {
                 state.selectedDocument?.engine.textView.toggleComment(nil)
