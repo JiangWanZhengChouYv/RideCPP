@@ -15,17 +15,26 @@ public struct CompletionItem: Equatable, Sendable, Identifiable {
     public let kind: SymbolKind
     /// Explicit text to insert when it differs from `text` (semantic results).
     private let explicitInsertion: String?
+    /// Lower sorts first, as in the language server's `sortText`.
+    ///
+    /// The server already knows what is worth offering here — a local variable
+    /// before a header macro — and expresses it as a string it expects the client
+    /// to sort by. Ignoring it put `FE_ALL_EXCEPT` above `flag`, which is how a
+    /// completion list ends up full of noise.
+    public let sortKey: String
 
     public init(id: String = UUID().uuidString,
                 text: String,
                 detail: String? = nil,
                 kind: SymbolKind = .keyword,
-                explicitInsertion: String? = nil) {
+                explicitInsertion: String? = nil,
+                sortKey: String = "") {
         self.id = id
         self.text = text
         self.detail = detail
         self.kind = kind
         self.explicitInsertion = explicitInsertion
+        self.sortKey = sortKey
     }
 
     /// Text to insert: the explicit one when provided, otherwise the displayed text

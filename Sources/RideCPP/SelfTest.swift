@@ -513,6 +513,38 @@ final class SelfTestRunner {
             record("semantic-completion-via-clangd",
                    !appends.isEmpty && !signatures.isEmpty,
                    "clangd=\(provider is SemanticCompletionProvider) appends=\(appends.count) signatures=\(signatures.prefix(2))")
+        // Ranking: a local variable must lead the list, ahead of library symbols.
+        // clangd's `sortText` encodes this; ignoring it put header macros first.
+        if let semantic = AppState.shared.documents.first?.engine.textView.completionProvider
+            as? SemanticCompletionProvider {
+            let source = """
+            #include <bits/stdc++.h>
+            using namespace std;
+            int main() {
+                int flag = 0;
+                f
+            }
+            """
+            let probe = state.selectedDocument?.engine.textView
+            probe?.string = source
+            if let doc = state.selectedDocument, let tv = probe {
+                semantic.syncDocument(text: source, fileURL: doc.semanticURL)
+                let caret = (source as NSString).range(of: "\n    f\n").location + 6
+                let prefix = (source as NSString).substring(to: caret)
+                let lines = prefix.components(separatedBy: "\n")
+                semantic.caretPosition = CursorPosition(line: lines.count - 1,
+                                                        character: (lines.last! as NSString).length)
+                _ = semantic.completionItems(forPrefix: "f", document: source, context: .code)
+                for _ in 0..<20 { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+                let ranked = semantic.completionItems(forPrefix: "f", document: source, context: .code)
+                let first = ranked.first?.text ?? "-"
+                let flagIndex = ranked.firstIndex { $0.text == "flag" }
+                record("completion-ranks-local-first",
+                       first == "flag" || (flagIndex ?? 99) <= 2,
+                       "first=\(first) flagAt=\(flagIndex.map(String.init) ?? "-") top=\(ranked.prefix(4).map(\.text))")
+                tv.string = ""
+            }
+        }
         } else {
             record("semantic-completion-via-clangd", false, "clangd unavailable")
         }

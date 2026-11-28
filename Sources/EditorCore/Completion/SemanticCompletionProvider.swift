@@ -216,9 +216,16 @@ public final class SemanticCompletionProvider: CompletionProviding {
         }
 
         if let cached, !cached.isEmpty {
-            // Semantic results first; lexical fills the tail so members and locals
-            // from the current scope are still present.
-            var merged = cached
+            // Ranked by the server's own priorities, with locals and functions
+            // ahead of header macros; without this the list led with things like
+            // `FE_ALL_EXCEPT` because they happened to arrive first.
+            let ordered = cached.sorted { lhs, rhs in
+                if lhs.sortKey != rhs.sortKey { return lhs.sortKey < rhs.sortKey }
+                return lhs.text.localizedStandardCompare(rhs.text) == .orderedAscending
+            }
+            // Lexical results only fill gaps the server left, and go after its
+            // answers so a local identifier the server missed still appears.
+            var merged = ordered
             var seen = Set(merged.map(\.insertionText))
             for candidate in lexical where !seen.contains(candidate.insertionText) {
                 merged.append(candidate)
@@ -255,13 +262,44 @@ public final class SemanticCompletionProvider: CompletionProviding {
         return .semantic(text: name.isEmpty ? lsp.label : name,
                          detail: detail,
                          kind: Self.kind(fromLSP: lsp.kindCode),
-                         insertion: insertion)
+                         insertion: insertion,
+                         sortKey: Self.rankKey(lsp: lsp, name: name.isEmpty ? lsp.label : name,
+                                               prefix: prefix))
+    }
+
+    /// Ranking key for one suggestion.
+    ///
+    /// clangd already orders its answers: `sortText` encodes scope proximity, and
+    /// a local variable sorts before a header macro. Measured on a real file,
+    /// `flag` came back as `3f8bfb0e…` and `false_type` as `4109f058…`, so the
+    /// prefix ordering is meaningful and must not be reinvented — an earlier
+    /// version re-weighted by symbol kind and made the list worse.
+    ///
+    /// The one thing worth adding is that lowercase typing should not be buried
+    /// under shouty macros: `FE_ALL_EXCEPT` matches `f` only case-insensitively.
+    static func rankKey(lsp: LSPCompletionItem, name: String, prefix: String) -> String {
+        let caseTier: String
+        if prefix.isEmpty {
+            caseTier = "0"
+        } else if name.hasPrefix(prefix) {
+            caseTier = "0"
+        } else {
+            caseTier = "1"
+        }
+        return caseTier + (lsp.sortText ?? "~")
     }
 
     /// The bare identifier at the start of a clangd label.
     static func name(from label: String) -> String {
         var result = ""
-        for character in label.trimmingCharacters(in: .whitespaces) {
+        // clangd prefixes header symbols with a bullet ("•cout"). It identifies
+        // where a symbol comes from, not part of its name, and leaving it in made
+        // the name come back empty — which then sorted those items to the top.
+        var body = Substring(label.trimmingCharacters(in: .whitespaces))
+        while let first = body.first, first == "•" || first == " " {
+            body = body.dropFirst()
+        }
+        for character in body {
             if character.isLetter || character.isNumber || character == "_" || character == "~" {
                 result.append(character)
             } else {
@@ -289,7 +327,7 @@ public final class SemanticCompletionProvider: CompletionProviding {
             return .userDefined
         case 7, 8:            // Class, Interface
             return .header
-        case 14:              // Keyword
+        case 14, 15:          // Keyword, Snippet (clangd sends `for (…)` as a snippet)
             return .keyword
         default:
             return .header
@@ -356,12 +394,14 @@ public final class SemanticCompletionProvider: CompletionProviding {
 
 extension CompletionItem {
     /// Convenience for the semantic provider: display text and inserted text differ.
-    static func semantic(text: String, detail: String?, kind: SymbolKind, insertion: String) -> CompletionItem {
+    static func semantic(text: String, detail: String?, kind: SymbolKind, insertion: String,
+                         sortKey: String = "") -> CompletionItem {
         CompletionItem(id: "lsp:\(text):\(insertion.hashValue)",
                        text: text,
                        detail: detail,
                        kind: kind,
-                       explicitInsertion: insertion)
+                       explicitInsertion: insertion,
+                       sortKey: sortKey)
     }
 }
 
