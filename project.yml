@@ -22,7 +22,7 @@ settings:
     CLANG_ENABLE_MODULES: "YES"
     SWIFT_TREAT_WARNINGS_AS_ERRORS: "NO"
     MARKETING_VERSION: "1.2.0"
-    CURRENT_PROJECT_VERSION: "2"
+    CURRENT_PROJECT_VERSION: "3"
     # The Swift macro plugin server cannot start inside the driver sandbox in this
     # environment ("sandbox-exec: sandbox_apply: Operation not permitted"), which
     # breaks @State/@Observable. Disabling the driver sandbox for the compiler is
