@@ -361,7 +361,6 @@ public final class AppState: ObservableObject {
     @Published public private(set) var updateRevision = 0
     private var updateSubscription: AnyCancellable?
 
-
     // MARK: - Undo / redo
 
     /// Observes undo-manager activity so the menu items track the real stack.
@@ -392,7 +391,8 @@ public final class AppState: ObservableObject {
         return diagnosticsByFile[url] ?? []
     }
     /// Latest clangd result per file, keyed by standardized URL.
-    @Published private var diagnosticsByFile: [URL: [LSPDiagnostic]] = [:]
+    @Published var diagnosticsByFile: [URL: [LSPDiagnostic]] = [:]
+    /// out while the user is thinking about that line.
 
     var semanticProvider: SemanticCompletionProvider?
     /// Workspace root clangd is bound to.
@@ -429,8 +429,12 @@ public final class AppState: ObservableObject {
         for document in documents {
             document.engine.textView.completionProvider = provider
             document.engine.textView.documentFileURL = document.semanticURL
-            document.engine.textView.onDocumentSync = { text, url in
+            document.engine.textView.onDocumentSync = { [weak self] text, url in
                 provider.syncDocument(text: text, fileURL: url)
+                // The marks on screen describe the previous text, so they are
+                // dropped as soon as it changes; what comes back after the pause
+                // is what the user is looking for.
+                if let self { self.clearPendingDiagnostics(for: document) }
             }
             provider.syncDocument(text: document.text, fileURL: document.semanticURL)
         }
@@ -449,25 +453,15 @@ public final class AppState: ObservableObject {
     ///
     /// Positions arrive as LSP line/character pairs, which are 0-based and counted in
     /// UTF-16 units — the same units `NSString` uses, so the conversion is direct.
-    private func applyLiveDiagnostics(_ items: [LSPDiagnostic], for url: URL, text: String) {
-        diagnosticsByFile[url.standardizedFileURL] = items
-        guard let document = documents.first(where: {
-            $0.semanticURL.standardizedFileURL == url.standardizedFileURL
-        }) else { return }
-        // Convert against the text the diagnostics were computed from, not the
-        // current text: while the user types, the two differ and the marks would
-        // land on unrelated lines.
-        let ns = text as NSString
-        var inline: [CodeTextView.InlineDiagnostic] = []
-        for item in items {
-            guard let range = Self.characterRange(for: item.range, in: ns) else { continue }
-            let kind: CodeTextView.InlineDiagnostic.Kind = item.severity == .error ? .error : .warning
-            inline.append(.init(range: range, kind: kind, message: item.message, code: item.code))
-        }
-        document.engine.textView.setDiagnostics(inline)
-    }
+    /// The diagnostic closest to the caret among those not yet painted.
+func nearestPendingDiagnostic(in textView: CodeTextView,
+                              for document: DocumentModel) -> CodeTextView.InlineDiagnostic? {
+    let caret = textView.selectedRange().location
+    return pendingInlineDiagnostics(for: document)
+        .min { abs($0.range.location - caret) < abs($1.range.location - caret) }
+}
 
-    /// Installs the hover panel's fix button on one document.
+/// Installs the hover panel's fix button on one document.
     ///
     /// Only diagnostics produce a hover panel now, so there is no documentation
     /// query to wire up: hovering ordinary code shows nothing.
@@ -516,8 +510,12 @@ public final class AppState: ObservableObject {
         if let provider = semanticProvider {
             document.engine.textView.completionProvider = provider
             document.engine.textView.documentFileURL = document.semanticURL
-            document.engine.textView.onDocumentSync = { text, url in
+            document.engine.textView.onDocumentSync = { [weak self] text, url in
                 provider.syncDocument(text: text, fileURL: url)
+                // The marks on screen describe the previous text, so they are
+                // dropped as soon as it changes; what comes back after the pause
+                // is what the user is looking for.
+                if let self { self.clearPendingDiagnostics(for: document) }
             }
             provider.syncDocument(text: document.text, fileURL: document.semanticURL)
             wireHoverAndNavigation(document, provider: provider)
@@ -532,7 +530,6 @@ public final class AppState: ObservableObject {
         }
         wireInlineSuggestion(document)
     }
-
 
     /// Updates the breadcrumb symbol and the Ln/Col readout.
     public func updateCaretContext(line: Int, column: Int, text: String) {
@@ -1122,7 +1119,12 @@ public func fixDiagnosticAtCaret() {
     // With no diagnostic under the caret, jump to the nearest one and fix that:
     // requiring the user to first park the caret exactly on the squiggle made the
     // shortcut as fiddly as the mouse path it was meant to replace.
-    guard let inline = tv.diagnostic(at: tv.selectedRange().location) ?? nearestDiagnostic(in: tv) else {
+    //
+    // Diagnostics waiting out the typing delay count too, so the shortcut works
+    // the instant the mistake is typed rather than only once the squiggle appears.
+    guard let inline = tv.diagnostic(at: tv.selectedRange().location)
+            ?? nearestPendingDiagnostic(in: tv, for: document)
+            ?? nearestDiagnostic(in: tv) else {
         statusText = L10n.t("status.noFixHere")
         return
     }
