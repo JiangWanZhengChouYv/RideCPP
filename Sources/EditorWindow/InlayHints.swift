@@ -61,8 +61,12 @@ extension CodeTextView {
         let font = NSFont.systemFont(ofSize: max(9, (self.font?.pointSize ?? 13) - 1))
         // Attachments are inserted back to front so earlier offsets stay valid.
         let sorted = hints.compactMap { hint -> (Int, String)? in
+            // clangd names anonymous members `u1`, `u2`, … and decorates them with
+            // the punctuation around them. Those read as `{&u1:` rather than a
+            // name, so they are dropped instead of shown.
+            guard let readable = Self.readableLabel(hint.text) else { return nil }
             guard let offset = Self.utf16Offset(of: hint.position, in: ns) else { return nil }
-            return (offset, hint.text)
+            return (offset, readable)
         }.sorted { $0.0 > $1.0 }
 
         let display = NSMutableAttributedString(string: source, attributes: [
@@ -181,4 +185,21 @@ final class InlayHintState {
     var items: [InlayHintItem] = []
     var applied = false
     var sourceText: String?
+}
+
+extension CodeTextView {
+    /// Trims a hint label to what is worth showing.
+    ///
+    /// clangd wraps synthetic names in the surrounding punctuation — `{&u1:` for
+    /// an anonymous pair member — and reuses names like `u1` that mean nothing to
+    /// a reader. Returning nil drops the label entirely.
+    static func readableLabel(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: CharacterSet(charactersIn: "{}&* "))
+        guard !trimmed.isEmpty else { return nil }
+        let name = trimmed.split(separator: ":").first.map(String.init) ?? trimmed
+        if name.count >= 2, name.first == "u", name.dropFirst().allSatisfy({ $0.isNumber }) {
+            return nil
+        }
+        return trimmed
+    }
 }

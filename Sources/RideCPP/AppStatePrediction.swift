@@ -50,7 +50,38 @@ func requestInlayHints(_ document: DocumentModel, provider: SemanticCompletionPr
                         firstLine: first, lastLine: last) { [weak self, weak document] hints in
         guard let self, let document, self.selectedDocument === document,
               document.text == text else { return }
+        guard !hints.isEmpty else {
+            // clangd answers nothing until it has parsed the file, which for a
+            // `bits/stdc++.h` translation unit takes a moment. Retrying a few
+            // times is what makes a freshly opened file show its labels without
+            // the user having to type first.
+            self.scheduleInlayHintRetry(document, provider: provider, attempt: 1)
+            return
+        }
         document.engine.textView.setInlayHints(hints)
+    }
+}
+
+/// Retries the label request a few times while clangd finishes parsing.
+func scheduleInlayHintRetry(_ document: DocumentModel, provider: SemanticCompletionProvider,
+                            attempt: Int) {
+    guard attempt <= 4 else { return }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self, weak document] in
+        guard let self, let document, self.selectedDocument === document else { return }
+        let text = document.text
+        guard !text.isEmpty else { return }
+        let ns = text as NSString
+        let lineCount = max(1, ns.substring(from: 0).components(separatedBy: "\n").count)
+        provider.inlayHints(in: text, fileURL: document.semanticURL,
+                            firstLine: 0, lastLine: min(lineCount, 200)) { [weak self] hints in
+            guard let self, self.selectedDocument === document,
+                  document.text == text else { return }
+            if hints.isEmpty {
+                self.scheduleInlayHintRetry(document, provider: provider, attempt: attempt + 1)
+            } else {
+                document.engine.textView.setInlayHints(hints)
+            }
+        }
     }
 }
 

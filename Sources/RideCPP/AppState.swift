@@ -523,6 +523,9 @@ public final class AppState: ObservableObject {
             wireHoverAndNavigation(document, provider: provider)
             wireSignatureHint(document, provider: provider)
             wireInlayHints(document, provider: provider)
+            // Ask once on open: the hook otherwise only fires on an edit, so a
+            // freshly opened file showed no labels until the first keystroke.
+            requestInlayHints(document, provider: provider)
             document.engine.textView.onRenameRequest = { [weak self] in
                 self?.renameSymbolAtCaret()
             }
