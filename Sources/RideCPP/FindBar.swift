@@ -41,6 +41,15 @@ struct FindBar: View {
 
     private var findRow: some View {
         HStack(spacing: 8) {
+            // The replace toggle leads the row: it changes what the bar itself
+            // is, so it reads as a mode switch in front of the fields rather
+            // than another action off to the side.
+            Button { model.showsReplace.toggle() } label: {
+                Image(systemName: model.showsReplace ? "chevron.down.circle.fill"
+                                                     : "chevron.right.circle")
+            }
+            .buttonStyle(.borderless)
+            .help(L10n.t("find.toggleReplace"))
             field(text: $model.query, placeholder: L10n.t("find.placeholder"), field: .find)
                 .onSubmit { model.findNext() }
             resultCount
@@ -56,11 +65,6 @@ struct FindBar: View {
             }
             .buttonStyle(.borderless)
             .help(L10n.t("find.next"))
-            Button { model.showsReplace.toggle() } label: {
-                Image(systemName: model.showsReplace ? "chevron.down.circle" : "chevron.right.circle")
-            }
-            .buttonStyle(.borderless)
-            .help(L10n.t("find.toggleReplace"))
             Button { model.dismiss() } label: {
                 Image(systemName: "xmark.circle.fill")
                     .foregroundStyle(.secondary)

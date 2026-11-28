@@ -522,6 +522,7 @@ public final class AppState: ObservableObject {
             provider.syncDocument(text: document.text, fileURL: document.semanticURL)
             wireHoverAndNavigation(document, provider: provider)
             wireSignatureHint(document, provider: provider)
+            wireInlayHints(document, provider: provider)
             document.engine.textView.onRenameRequest = { [weak self] in
                 self?.renameSymbolAtCaret()
             }

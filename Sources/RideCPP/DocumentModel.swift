@@ -55,7 +55,12 @@ public final class DocumentModel: ObservableObject, Identifiable {
         compileURL = fileURL
     }
 
-    public var text: String { engine.textView.string }
+    /// The document's own text.
+    ///
+    /// Not `textView.string` while inlay labels are shown: those are attachments
+    /// that occupy space in the display, and reading them here would put U+FFFC
+    /// characters into saves, diagnostics and completions.
+    public var text: String { engine.textView.currentSourceText() }
 
     /// Identity handed to clangd.
     ///

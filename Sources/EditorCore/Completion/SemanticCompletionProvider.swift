@@ -134,6 +134,31 @@ public final class SemanticCompletionProvider: CompletionProviding {
         attempt(1)
     }
 
+    /// Advisory labels clangd would draw for a range of the document.
+    ///
+    /// Called with the visible portion: clangd computes hints per range and
+    /// ignores very large requests.
+    public func inlayHints(in text: String, fileURL: URL?,
+                           firstLine: Int, lastLine: Int,
+                           completion: @escaping ([LSPInlayHint]) -> Void) {
+        let url = fileURL ?? FileManager.default.temporaryDirectory
+            .appendingPathComponent("RideCPP-untitled.cpp")
+        let range = LSPRange(start: LSPPosition(line: max(0, firstLine), character: 0),
+                             end: LSPPosition(line: max(0, lastLine), character: 0))
+        func attempt(_ remaining: Int) {
+            session.requestInlayHints(uri: "file://" + url.path, range: range) { hints in
+                if hints.isEmpty, remaining > 0 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        attempt(remaining - 1)
+                    }
+                    return
+                }
+                DispatchQueue.main.async { completion(hints) }
+            }
+        }
+        attempt(1)
+    }
+
     /// The signature of the call the caret is inside, if any.
     ///
     /// Delegates the "am I inside a call" decision to `CallContext`, which is

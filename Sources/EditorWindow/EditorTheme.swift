@@ -58,6 +58,11 @@ public enum EditorTheme {
                                                 light: NSColor.systemOrange.withAlphaComponent(0.22),
                                                 dark: NSColor.systemOrange.withAlphaComponent(0.32))
 
+    /// Grey used for clangd's advisory labels inside the code.
+    public static let inlayHint = theme("inlayHint",
+                                        light: NSColor(white: 0.45, alpha: 1),
+                                        dark: NSColor(white: 0.55, alpha: 1))
+
     /// Background for every search match, and a stronger one for the selected
     /// match. Translucent so the token underneath stays readable.
     public static let findMatch = theme("findMatch",

@@ -418,6 +418,53 @@ public final class ClangdSession {
         }
     }
 
+    // MARK: - Inlay hints
+
+    /// Asks for the grey labels clangd would draw inside the code.
+    ///
+    /// These are the `name:` annotations on call arguments and the `: int` on
+    /// deduced types. They are advisory only: never inserted, never part of the
+    /// document, so they cannot be saved or undone by accident.
+    ///
+    /// clangd computes hints for a range at a time and ignores very large ones, so
+    /// callers pass the visible portion of the file.
+    public func requestInlayHints(uri: String,
+                                  range: LSPRange,
+                                  completion: @escaping ([LSPInlayHint]) -> Void) {
+        sendRequest(method: "textDocument/inlayHint", params: [
+            "textDocument": ["uri": uri],
+            "range": [
+                "start": ["line": range.start.line, "character": range.start.character],
+                "end": ["line": range.end.line, "character": range.end.character]
+            ]
+        ]) { result in
+            guard case .success(let value) = result,
+                  let raw = value as? [[String: Any]] else {
+                completion([])
+                return
+            }
+            completion(raw.compactMap(Self.inlayHint(from:)))
+        }
+    }
+
+    static func inlayHint(from json: [String: Any]) -> LSPInlayHint? {
+        guard let position = json["position"] as? [String: Any],
+              let line = position["line"] as? Int,
+              let character = position["character"] as? Int else { return nil }
+        // `label` is either a string or an array of parts with values.
+        var text = ""
+        if let label = json["label"] as? String {
+            text = label
+        } else if let parts = json["label"] as? [[String: Any]] {
+            text = parts.compactMap { $0["value"] as? String }.joined()
+        }
+        guard !text.isEmpty else { return nil }
+        return LSPInlayHint(position: LSPPosition(line: line, character: character),
+                            text: text,
+                            kind: json["kind"] as? Int ?? 0,
+                            paddingRight: json["paddingRight"] as? Bool ?? false)
+    }
+
     // MARK: - Signature help
 
     /// Asks what arguments a call at `position` takes.
@@ -1018,4 +1065,27 @@ public struct LSPTextEdit: Sendable, Equatable {
         self.range = range
         self.newText = newText
     }
+}
+
+/// A grey label clangd wants drawn at a position, e.g. `name:` on an argument.
+public struct LSPInlayHint: Sendable, Equatable {
+    public enum Kind: Int, Sendable {
+        case type = 1
+        case parameter = 2
+    }
+
+    public let position: LSPPosition
+    public let text: String
+    public let kind: Int
+    /// Whether a space should separate the label from what follows it.
+    public let paddingRight: Bool
+
+    public init(position: LSPPosition, text: String, kind: Int, paddingRight: Bool) {
+        self.position = position
+        self.text = text
+        self.kind = kind
+        self.paddingRight = paddingRight
+    }
+
+    public var typedKind: Kind { Kind(rawValue: kind) ?? .type }
 }

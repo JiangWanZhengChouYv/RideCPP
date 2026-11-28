@@ -12,6 +12,48 @@ import BuildKit
 /// was open at the time — including test files — and contributed nothing the
 /// model does not do better.
 extension AppState {
+/// Connects the grey inlay labels for one document.
+///
+/// Refreshed after edits rather than per keystroke: clangd computes hints for a
+/// range and each request costs a round trip, so they are debounced the way the
+/// completion suggestions are.
+func wireInlayHints(_ document: DocumentModel, provider: SemanticCompletionProvider) {
+    let textView = document.engine.textView
+    textView.onInlayHintQuery = { [weak self, weak document] in
+        guard let self, let document, self.selectedDocument === document else { return }
+        self.requestInlayHints(document, provider: provider)
+    }
+}
+
+/// Asks for hints covering the visible lines, and shows them.
+func requestInlayHints(_ document: DocumentModel, provider: SemanticCompletionProvider) {
+    guard settings.inlayHintsEnabled else {
+        document.engine.textView.clearInlayHints()
+        return
+    }
+    let textView = document.engine.textView
+    let text = document.text
+    let ns = text as NSString
+    // The visible lines, with a margin so scrolling does not reveal a band that
+    // has no labels yet.
+    guard let layoutManager = textView.layoutManager,
+          let container = textView.textContainer else { return }
+    let visible = textView.visibleRect
+    let glyphs = layoutManager.glyphRange(forBoundingRect: visible.insetBy(dx: 0, dy: -visible.height),
+                                          in: container)
+    let chars = layoutManager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+    let firstChar = max(0, chars.location)
+    let lastChar = min(ns.length, NSMaxRange(chars))
+    let first = ns.substring(to: firstChar).components(separatedBy: "\n").count - 1
+    let last = ns.substring(to: lastChar).components(separatedBy: "\n").count
+    provider.inlayHints(in: text, fileURL: document.semanticURL,
+                        firstLine: first, lastLine: last) { [weak self, weak document] hints in
+        guard let self, let document, self.selectedDocument === document,
+              document.text == text else { return }
+        document.engine.textView.setInlayHints(hints)
+    }
+}
+
 /// Connects the parameter hint for one document.
 ///
 /// Driven by caret movement rather than by typing: moving into an argument is

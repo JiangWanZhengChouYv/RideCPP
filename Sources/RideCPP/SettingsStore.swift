@@ -29,6 +29,11 @@ public final class SettingsStore: ObservableObject {
     @Published public var inlineModelEnabled: Bool {
         didSet { defaults.set(inlineModelEnabled, forKey: Keys.inlineModelEnabled) }
     }
+    /// Whether clangd's grey labels (`name:` on arguments, `: int` on deduced
+    /// types) are drawn inside the code.
+    @Published public var inlayHintsEnabled: Bool {
+        didSet { defaults.set(inlayHintsEnabled, forKey: Keys.inlayHintsEnabled) }
+    }
     /// Model used for inline suggestions, empty to pick automatically.
     @Published public var inlineModel: String { didSet { defaults.set(inlineModel, forKey: Keys.inlineModel) } }
 
@@ -61,6 +66,7 @@ public final class SettingsStore: ObservableObject {
         static let autoIndent = "editor.autoIndent"
         static let inlineModelEnabled = "completion.inlineModelEnabled"
         static let inlineModel = "completion.inlineModel"
+        static let inlayHintsEnabled = "editor.inlayHints"
         static let showLineNumbers = "editor.showLineNumbers"
         static let compilerPath = "build.compilerPath"
         static let standard = "build.standard"
@@ -90,6 +96,7 @@ public final class SettingsStore: ObservableObject {
             Keys.autoIndent: true,
             Keys.inlineModelEnabled: true,
             Keys.inlineModel: "",
+            Keys.inlayHintsEnabled: true,
             Keys.showLineNumbers: true,
             Keys.compilerPath: discovered.first?.path ?? "/usr/bin/clang++",
             Keys.standard: "c++17",
@@ -109,6 +116,7 @@ public final class SettingsStore: ObservableObject {
         showLineNumbers = defaults.bool(forKey: Keys.showLineNumbers)
         inlineModelEnabled = defaults.bool(forKey: Keys.inlineModelEnabled)
         inlineModel = defaults.string(forKey: Keys.inlineModel) ?? ""
+        inlayHintsEnabled = defaults.bool(forKey: Keys.inlayHintsEnabled)
         compilerPath = defaults.string(forKey: Keys.compilerPath) ?? "/usr/bin/clang++"
         standard = defaults.string(forKey: Keys.standard) ?? "c++17"
         optimization = defaults.string(forKey: Keys.optimization) ?? "-O2"
