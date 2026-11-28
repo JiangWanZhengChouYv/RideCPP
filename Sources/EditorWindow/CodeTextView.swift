@@ -513,6 +513,13 @@ public final class CodeTextView: NSTextView {
             super.insertTab(sender)
             return
         }
+        // Tab arrives through `insertTab`, not `keyDown`, so the completion
+        // panel never saw it — the first Tab indented and only the second
+        // accepted an item. The open list takes it first.
+        if completionPanel?.isShowing == true {
+            completionPanel?.acceptSelection()
+            return
+        }
         // Tab accepts the prediction when one is showing, and indents otherwise:
         // the ghost text is only ever what the single next key acts on.
         if acceptSuggestion() { return }

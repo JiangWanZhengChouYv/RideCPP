@@ -271,6 +271,11 @@ public final class BuiltinCompletionProvider: CompletionProviding {
             // `using namespace std;` makes `std` look like a local identifier; it
             // is still never a thing to type.
             guard !Self.isNoise(symbol) else { continue }
+            // Neither is the word being typed: it is in the document precisely
+            // because it is on the line, and accepting it would swallow a
+            // keystroke and change nothing. A keyword or snippet that happens to
+            // equal the prefix is still offered.
+            guard symbol.lowercased() != lowered else { continue }
             candidates.append(RankedCandidate(name: symbol, detail: nil,
                                               score: Self.usageScore(symbol, query: lowered, kind: .userDefined),
                                               kind: .userDefined))

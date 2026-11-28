@@ -286,7 +286,45 @@ public final class SemanticCompletionProvider: CompletionProviding {
         } else {
             caseTier = "1"
         }
-        return caseTier + (lsp.sortText ?? "~")
+        // Fuzzy quality: IntelliJ's PrefixMatchingWeigher also separates a real
+        // prefix match from one that only matches inside the word. `vpb` should
+        // find `push_back`, but a straight prefix always wins over it.
+        let matchTier = Self.matchTier(name: name, prefix: prefix)
+        return caseTier + matchTier + (lsp.sortText ?? "~")
+    }
+
+    /// How well `prefix` matches `name`, in the spirit of IntelliJ's weighers.
+    ///
+    /// 0 — the name starts with the prefix (`fl` → `flag`)
+    /// 1 — the prefix matches the starts of words inside it (`pb` → `push_back`)
+    /// 2 — the characters appear in order but not at word starts (`fse` → `fsum`)
+    /// 3 — no match at all
+    static func matchTier(name: String, prefix: String) -> String {
+        guard !prefix.isEmpty else { return "0" }
+        let lowerName = name.lowercased()
+        let lowerPrefix = prefix.lowercased()
+        if lowerName.hasPrefix(lowerPrefix) { return "0" }
+        // Word-initial matching, the acronym case.
+        var initials = ""
+        var atWordStart = true
+        for character in lowerName {
+            if character == "_" {
+                atWordStart = true
+                continue
+            }
+            if atWordStart { initials.append(character) }
+            atWordStart = false
+        }
+        if initials.hasPrefix(lowerPrefix) { return "1" }
+        // Characters in order anywhere.
+        var searchIndex = lowerName.startIndex
+        for character in lowerPrefix {
+            guard let found = lowerName[searchIndex...].firstIndex(of: character) else {
+                return "3"
+            }
+            searchIndex = lowerName.index(after: found)
+        }
+        return "2"
     }
 
     /// The bare identifier at the start of a clangd label.
