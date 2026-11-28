@@ -18,3 +18,4 @@ RideCPP.xcodeproj/
 .vscode/
 build-release/
 dist/
+.workbuddy/

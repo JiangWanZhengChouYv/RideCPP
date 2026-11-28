@@ -46,7 +46,11 @@ A lightweight native macOS C++ IDE: **SwiftUI** for the interface, **AppKit `NST
 | 欢迎页 | 没有打开文件时给出「新建文件 / 打开文件」入口与最近打开列表，而不是空白文档 |
 | 标签页 | 关闭最后一个标签后回到欢迎页；「未命名 N」的编号会自动复用（关掉 1 号，下一个新文件又叫 1 号）；未保存的标签实时显示圆点 |
 | 应用图标 | 代码绘制（`scripts/AppIconRenderer.swift` 生成全套尺寸），`make icon` 可重新生成 |
-| 代码补全 | **本期不实现**，已预留 `CompletionProviding` 协议与调用点，后续接模型无需改编辑器结构 |
+| 代码补全 | clangd 语义补全，按作用域距离排序（局部变量优先于头文件符号） |
+| 参数提示 | 光标在调用括号内时，光标下方显示完整签名，**当前参数高亮**并显示 `2/3` 那样的序号 |
+| 灰色标签 | clangd 的 inlay hints：调用参数名 `name:`、类型推断 `: int`；标签会推开代码，不遮挡 |
+| 重命名符号 | `F2` 改名，clangd 找出所有引用一起改；**一次 `⌘Z` 撤销全部**，不是一个个撤 |
+| 查找替换 | `⌘F` 查找、`⌘⌥F` 替换、`⌘G`/`⇧⌘G` 上下跳转、`⌘⌥↵` 全部替换；支持正则、区分大小写、全字匹配；选中文本后按 `⌘F` 自动填入 |
 
 <img src="Resources/Docs/appicon.png" width="128" align="right" alt="RideCPP icon">
 
