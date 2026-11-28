@@ -22,10 +22,10 @@ public final class SettingsStore: ObservableObject {
     @Published public var showLineNumbers: Bool { didSet { defaults.set(showLineNumbers, forKey: Keys.showLineNumbers) } }
 
     // Inline predictions
-    /// Whether the local model may be consulted for continuations.
+    /// Whether inline suggestions are enabled.
     ///
-    /// Off by default: a model request costs a little power, and the offline
-    /// predictor already covers the common shapes without asking for anything.
+    /// Off by default: every suggestion is a model request, which costs power.
+    /// The user turns it on deliberately.
     @Published public var inlineModelEnabled: Bool {
         didSet { defaults.set(inlineModelEnabled, forKey: Keys.inlineModelEnabled) }
     }

@@ -205,3 +205,6 @@
 "settings.prediction.notInstalled.detail" = "Ollama runs local models on your Mac. Without it RideCPP still predicts from your own code — it just cannot suggest longer passages.";
 "settings.prediction.getOllama" = "Get Ollama";
 "settings.prediction.recheck" = "Check again";
+
+"settings.prediction.toggle" = "Predict while typing";
+"settings.prediction.toggle.detail" = "Uses a local model through Ollama to suggest the rest of the line as grey text. Press Tab to accept, Escape to dismiss.";

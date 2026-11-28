@@ -191,12 +191,12 @@ public final class BuiltinCompletionProvider: CompletionProviding {
 
     private let index: DocumentSymbolIndex
     private let symbols: UserSymbolStore
-
     public init(index: DocumentSymbolIndex = .shared,
                 symbols: UserSymbolStore = .shared) {
         self.index = index
         self.symbols = symbols
     }
+
 
     public func completionItems(forPrefix prefix: String,
                                 document: String,

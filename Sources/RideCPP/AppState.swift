@@ -94,7 +94,9 @@ public final class AppState: ObservableObject {
         DispatchQueue.global(qos: .utility).async {
             UserSymbolStore.shared.load()
             DispatchQueue.main.async {
-                UserSymbolStore.shared.remember(declarationsIn: self.selectedDocument?.text ?? "")
+                if !Self.isSelfTestRun {
+                    UserSymbolStore.shared.remember(declarationsIn: self.selectedDocument?.text ?? "")
+                }
             }
         }
 
@@ -308,6 +310,15 @@ public final class AppState: ObservableObject {
         }
     }
 
+    /// True while the in-process acceptance checks are running.
+    ///
+    /// Those checks open throwaway documents containing deliberate mistakes, so
+    /// anything learned from them is junk in the user's own suggestion data.
+    static var isSelfTestRun: Bool {
+        guard let path = ProcessInfo.processInfo.environment["RIDECPP_SELFTEST"] else { return false }
+        return !path.isEmpty
+    }
+
     /// Called from `applicationShouldTerminate` so quitting can cancel.
     public func confirmQuit() -> NSApplication.TerminateReply {
         let dirty = documents.filter(\.isDirty)
@@ -374,8 +385,6 @@ public final class AppState: ObservableObject {
 
     // MARK: - Inline predictions
 
-    /// Offline predictor, always available.
-    let predictor = StatisticalPredictor()
     /// Local model client (Ollama).
     let ollama = OllamaClient()
     /// Model to use, once one has been found on the server.

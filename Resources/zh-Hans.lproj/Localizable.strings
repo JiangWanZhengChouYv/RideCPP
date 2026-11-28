@@ -205,3 +205,6 @@
 "settings.prediction.notInstalled.detail" = "Ollama 可以在这台 Mac 上运行本地模型。没有它 RideCPP 仍然能从你自己的代码里学习续写，只是没法给出更长的段落。";
 "settings.prediction.getOllama" = "获取 Ollama";
 "settings.prediction.recheck" = "重新检查";
+
+"settings.prediction.toggle" = "输入时预测";
+"settings.prediction.toggle.detail" = "通过 Ollama 使用本地模型，用灰字提示这一行剩下的部分。按 Tab 接受，按 Esc 忽略。";

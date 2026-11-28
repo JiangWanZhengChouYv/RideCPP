@@ -7,24 +7,20 @@ import BuildKit
 
 /// Wiring for the ghost-text suggestions.
 ///
-/// Kept apart from the main class body: the predictor answers offline and
-/// instantly, while the model is an optional second opinion that arrives later
-/// and replaces it only when it is still relevant.
+/// One source only: the local model. An earlier design also learned line shapes
+/// from the user's own files, but that corpus collected the mistakes of whatever
+/// was open at the time — including test files — and contributed nothing the
+/// model does not do better.
 extension AppState {
 /// Connects the predicted-continuation hook for one document.
 ///
-/// The predictor always answers instantly from what the user has written, so
-/// a suggestion never waits on the network. When a local model is available
-/// its answer replaces the offline one as soon as it arrives.
+/// The model answers asynchronously, so nothing is shown until it replies; a
+/// reply that arrives after the caret moved is discarded.
 func wireInlineSuggestion(_ document: DocumentModel) {
-    predictor.learn(from: document.text)
     document.engine.textView.onRequestSuggestion = { [weak self, weak document] prefix, suffix in
         guard let self, let document else { return nil }
-        let offline = self.predictor.predict(prefixBeforeCaret: prefix,
-                                             document: document.text,
-                                             suffixAfterCaret: suffix)
         self.requestModelSuggestion(prefix: prefix, suffix: suffix, document: document)
-        return offline
+        return nil
     }
 }
 

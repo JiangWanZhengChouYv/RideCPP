@@ -54,15 +54,17 @@ struct SettingsView: View {
     /// Inline predictions: the local model, and what to do when it is absent.
     private var predictionTab: some View {
         Form {
-            Section(L10n.t("settings.prediction.offline")) {
-                Text(L10n.t("settings.prediction.offline.detail"))
+            Section {
+                Toggle(L10n.t("settings.prediction.toggle"), isOn: $settings.inlineModelEnabled)
+                Text(L10n.t("settings.prediction.toggle.detail"))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Section(L10n.t("settings.prediction.model")) {
-                Toggle(L10n.t("settings.prediction.useModel"), isOn: $settings.inlineModelEnabled)
-                modelStatus
+            if settings.inlineModelEnabled {
+                Section {
+                    modelStatus
+                }
             }
         }
         .formStyle(.grouped)
