@@ -30,11 +30,12 @@ public final class OllamaClient {
 
     public struct Config: Sendable {
         public var host: String
-        /// Model names in preference order; the first installed one wins.
+        /// Model names in preference order; the first installed one wins when the
+        /// user has not picked one.
         ///
-        /// The 0.5b variant is first on purpose: at 397 MB it leaves the machine
-        /// cool and answers in around a tenth of a second, which is what makes
-        /// inline suggestions usable at all.
+        /// The 0.5b leads: at 397 MB it leaves the machine cool and answers in
+        /// around a tenth of a second. The user can choose any installed model in
+        /// settings; this list is only the default.
         public var preferredModels: [String]
         /// Hard ceiling for one suggestion. Past this the text is discarded.
         public var timeout: TimeInterval
@@ -52,16 +53,13 @@ public final class OllamaClient {
         }
     }
 
-    /// Preference order, best quality first.
+    /// Default model when the user has not chosen one.
     ///
-    /// The 1.5b is the default because the 0.5b adds commentary to its answers
-    /// (`amespace std;  // This line is necessary to use the std::cout object`),
-    /// which is unusable as inserted code. Measured warm on this machine, the
-    /// 1.5b answers in 0.02-0.16 s — no slower than the smaller model once
-    /// loaded — and completes `for` loops properly.
+    /// 0.5b: the lightest option that still completes code, and the one that
+    /// keeps the machine cool and quiet. Larger models are available in settings.
     public static let defaultModels = [
-        "qwen2.5-coder:1.5b",
-        "qwen2.5-coder:0.5b"
+        "qwen2.5-coder:0.5b",
+        "qwen2.5-coder:1.5b"
     ]
 
     public var config: Config
@@ -96,6 +94,13 @@ public final class OllamaClient {
         }
         // Homebrew on Apple silicon, plus the app bundle the installer drops in.
         return FileManager.default.fileExists(atPath: "/Applications/Ollama.app")
+    }
+
+    /// Models the server reported on the last availability check.
+    ///
+    /// Used to populate the model picker; empty until a check has run.
+    public var availableModels: [String] {
+        queue.sync { installedModels }
     }
 
     /// Asks the server which models it has.

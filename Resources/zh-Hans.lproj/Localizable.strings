@@ -208,3 +208,6 @@
 
 "settings.prediction.toggle" = "输入时预测";
 "settings.prediction.toggle.detail" = "通过 Ollama 使用本地模型，用灰字提示这一行剩下的部分。按 Tab 接受，按 Esc 忽略。";
+
+"settings.prediction.model" = "模型";
+"settings.prediction.refreshModels" = "刷新模型列表";

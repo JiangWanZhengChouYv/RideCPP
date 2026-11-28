@@ -64,4 +64,28 @@ final class TabAcceptsCompletionTests: XCTestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         XCTAssertNotEqual(engine.textView.string, before, "Tab must still indent")
     }
+
+    /// Every edit must notify the owner, which is what invalidates a prediction
+    /// still in flight for the older text.
+    func testEditsNotifyTheRevisionHook() {
+        let engine = makeEngine()
+        var revisions = 0
+        engine.textView.onDocumentRevisionChanged = { revisions += 1 }
+        engine.textView.setSelectedRange(NSRange(location: 0, length: 0))
+        engine.textView.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
+        engine.textView.insertText("y", replacementRange: NSRange(location: NSNotFound, length: 0))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertEqual(revisions, 2, "each edit must bump the revision")
+    }
+
+    /// The ghost text must clear when the line it described changes.
+    func testGhostTextClearsOnEdit() {
+        let engine = makeEngine()
+        engine.textView.setSelectedRange(NSRange(location: 0, length: 0))
+        engine.textView.showSuggestion(" (int i = 0; i < n; ++i) {")
+        XCTAssertTrue(engine.textView.hasSuggestion)
+        engine.textView.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertFalse(engine.textView.hasSuggestion, "a suggestion for older text must not linger")
+    }
 }

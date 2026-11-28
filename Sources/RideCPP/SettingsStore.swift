@@ -24,8 +24,8 @@ public final class SettingsStore: ObservableObject {
     // Inline predictions
     /// Whether inline suggestions are enabled.
     ///
-    /// Off by default: every suggestion is a model request, which costs power.
-    /// The user turns it on deliberately.
+    /// On by default: the feature is the reason the model is installed at all.
+    /// Suggestions fail silently, so an unreachable server costs nothing.
     @Published public var inlineModelEnabled: Bool {
         didSet { defaults.set(inlineModelEnabled, forKey: Keys.inlineModelEnabled) }
     }
@@ -88,7 +88,7 @@ public final class SettingsStore: ObservableObject {
             Keys.autoPair: true,
             Keys.autoComplete: true,
             Keys.autoIndent: true,
-            Keys.inlineModelEnabled: false,
+            Keys.inlineModelEnabled: true,
             Keys.inlineModel: "",
             Keys.showLineNumbers: true,
             Keys.compilerPath: discovered.first?.path ?? "/usr/bin/clang++",

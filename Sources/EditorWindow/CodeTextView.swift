@@ -55,6 +55,9 @@ public final class CodeTextView: NSTextView {
         // A prediction describes the text it was made for; once that text
         // changes it is stale. Ask again after the user stops typing.
         dismissSuggestion()
+        // Tells the owner the text advanced, so an answer still in flight for the
+        // old text can be recognised and dropped.
+        onDocumentRevisionChanged?()
         scheduleSuggestionRequest()
     }
 
@@ -883,6 +886,8 @@ public final class CodeTextView: NSTextView {
     public var onRequestSuggestion: ((_ prefixToCaret: String, _ suffix: String) -> String?)?
     /// Called when the user accepts the ghost text (Tab).
     public var onAcceptSuggestion: (() -> Void)?
+    /// Called after every edit, so in-flight predictions can be invalidated.
+    public var onDocumentRevisionChanged: (() -> Void)?
     /// Pending prediction request.
     var pendingSuggestionWork: DispatchWorkItem?
 

@@ -17,6 +17,10 @@ extension AppState {
 /// The model answers asynchronously, so nothing is shown until it replies; a
 /// reply that arrives after the caret moved is discarded.
 func wireInlineSuggestion(_ document: DocumentModel) {
+    document.engine.textView.onDocumentRevisionChanged = { [weak self] in
+        guard let self else { return }
+        self.inlineSuggestionGeneration &+= 1
+    }
     document.engine.textView.onRequestSuggestion = { [weak self, weak document] prefix, suffix in
         guard let self, let document else { return nil }
         self.requestModelSuggestion(prefix: prefix, suffix: suffix, document: document)
@@ -61,8 +65,12 @@ public func pullInlineModel(progress: @escaping (Double?, String) -> Void,
     let configured = settings.inlineModel.trimmingCharacters(in: .whitespaces)
     guard let model = configured.isEmpty ? inlineModelName : configured else { return }
     // A model round trip is only worth it for the text the user paused on.
-    let generation = inlineSuggestionGeneration &+ 1
-    inlineSuggestionGeneration = generation
+    // The generation identifies the text this answer is for, so it advances only
+    // when the document changes — not on every request. Bumping it per request
+    // made each in-flight query cancel the one before it, and since the model
+    // takes ~0.15 s while typing re-triggers faster than that, every answer was
+    // discarded and no suggestion ever appeared.
+    let generation = inlineSuggestionGeneration
     ollama.complete(model: model, prefix: prefix, suffix: suffix) { [weak self, weak document] text in
         guard let self, let document, !text.isEmpty,
               self.inlineSuggestionGeneration == generation,

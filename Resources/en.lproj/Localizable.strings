@@ -208,3 +208,6 @@
 
 "settings.prediction.toggle" = "Predict while typing";
 "settings.prediction.toggle.detail" = "Uses a local model through Ollama to suggest the rest of the line as grey text. Press Tab to accept, Escape to dismiss.";
+
+"settings.prediction.model" = "Model";
+"settings.prediction.refreshModels" = "Refresh model list";

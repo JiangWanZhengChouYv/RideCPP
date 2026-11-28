@@ -391,6 +391,8 @@ public final class AppState: ObservableObject {
     @Published public internal(set) var inlineModelName: String?
     /// What the local model situation is, for the settings UI.
     @Published public internal(set) var ollamaAvailability: OllamaClient.Availability?
+    /// Code models installed on the server, offered in the settings picker.
+    @Published public internal(set) var availableInlineModels: [String] = []
     /// Bumped per request so a late answer cannot overwrite a newer one.
     var inlineSuggestionGeneration = 0
     /// In-flight model download.

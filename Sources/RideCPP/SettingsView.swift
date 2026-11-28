@@ -73,12 +73,20 @@ struct SettingsView: View {
     @ViewBuilder
     private var modelStatus: some View {
         switch state.ollamaAvailability {
-        case .ready(let model):
-            LabeledContent(L10n.t("settings.prediction.ready"), value: model)
-            Text(L10n.t("settings.prediction.ready.detail"))
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+        case .ready(let active):
+            // Every installed code model is offered; the quickest one is the
+            // default so the machine stays cool, and a more capable one is a
+            // deliberate choice.
+            Picker(L10n.t("settings.prediction.model"), selection: Binding(
+                get: { settings.inlineModel.isEmpty ? active : settings.inlineModel },
+                set: { settings.inlineModel = $0 }
+            )) {
+                ForEach(state.availableInlineModels.isEmpty ? [active] : state.availableInlineModels,
+                        id: \.self) { model in
+                    Text(model).tag(model)
+                }
+            }
+            Button(L10n.t("settings.prediction.refreshModels")) { state.refreshOllamaAvailability() }
         case .modelMissing(let model):
             Text(L10n.t("settings.prediction.missing", model))
                 .fixedSize(horizontal: false, vertical: true)
