@@ -275,6 +275,14 @@ public final class ClangdSession {
                     ],
                     "synchronization": ["didSave": false],
                     "publishDiagnostics": ["versionSupport": true],
+                    // Declared so the server knows argument hints are wanted and
+                    // formats them for a text client rather than an editor that
+                    // renders its own markup.
+                    "signatureHelp": [
+                        "signatureInformation": [
+                            "parameterInformation": ["labelOffsetSupport": false]
+                        ]
+                    ],
                     // Without this clangd answers code-action requests in the old
                     // `Command` form (`clangd.applyFix` carrying the edit in its
                     // arguments) instead of returning an `edit`, so the client
@@ -408,6 +416,52 @@ public final class ClangdSession {
             }
             completion(LSPCompletionItem.parse(value))
         }
+    }
+
+    // MARK: - Signature help
+
+    /// Asks what arguments a call at `position` takes.
+    ///
+    /// clangd answers with the whole signature list plus which parameter the
+    /// caret is inside, which is what lets the editor highlight the argument
+    /// being typed instead of dumping the full prototype and leaving the user to
+    /// count commas.
+    public func requestSignatureHelp(uri: String,
+                                     position: LSPPosition,
+                                     completion: @escaping ([LSPSignature]) -> Void) {
+        sendRequest(method: "textDocument/signatureHelp", params: [
+            "textDocument": ["uri": uri],
+            "position": ["line": position.line, "character": position.character]
+        ]) { result in
+            guard case .success(let value) = result,
+                  let object = value as? [String: Any],
+                  let raw = object["signatures"] as? [[String: Any]] else {
+                completion([])
+                return
+            }
+            let active = object["activeParameter"] as? Int ?? 0
+            let activeSignature = object["activeSignature"] as? Int ?? 0
+            let signatures = raw.compactMap(Self.signature(from:))
+            guard !signatures.isEmpty else {
+                completion([])
+                return
+            }
+            // The server names the active signature; fall back to the first.
+            let chosen = signatures.indices.contains(activeSignature) ? activeSignature : 0
+            completion([signatures[chosen]])
+        }
+    }
+
+    static func signature(from json: [String: Any]) -> LSPSignature? {
+        guard let label = json["label"] as? String else { return nil }
+        let rawParameters = json["parameters"] as? [[String: Any]] ?? []
+        let parameters: [LSPSignature.Parameter] = rawParameters.compactMap { entry in
+            guard let text = entry["label"] as? String else { return nil }
+            // Plain-string parameter labels are what clangd sends; the array form
+            // would need offsets into the label, which is not worth supporting.
+            return LSPSignature.Parameter(label: text)
+        }
+        return LSPSignature(label: label, parameters: parameters)
     }
 
     // MARK: - Navigation
@@ -874,3 +928,22 @@ public struct LSPLocation: Sendable, Equatable {
     }
 }
 
+/// One overload of a callable, as reported by `textDocument/signatureHelp`.
+public struct LSPSignature: Sendable, Equatable {
+    public struct Parameter: Sendable, Equatable {
+        public let label: String
+
+        public init(label: String) {
+            self.label = label
+        }
+    }
+
+    /// Full prototype, e.g. `push_back(const value_type &value)`.
+    public let label: String
+    public let parameters: [Parameter]
+
+    public init(label: String, parameters: [Parameter]) {
+        self.label = label
+        self.parameters = parameters
+    }
+}

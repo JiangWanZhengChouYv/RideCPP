@@ -61,6 +61,8 @@ public final class EditorEngine {
         textView.onSelectionChange = { [weak self] in
             self?.ruler.needsDisplay = true
             self?.onCaretChange?()
+            // Moving into a different argument changes which parameter is active.
+            self?.textView.onSignatureQuery?()
         }
         // Temporary attributes hold resolved colours, so a light/dark switch has
         // to rebuild them or the editor keeps the previous palette.

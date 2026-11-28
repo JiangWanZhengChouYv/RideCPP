@@ -12,6 +12,41 @@ import BuildKit
 /// was open at the time — including test files — and contributed nothing the
 /// model does not do better.
 extension AppState {
+/// Connects the parameter hint for one document.
+///
+/// Driven by caret movement rather than by typing: moving into an argument is
+/// just as much a reason to show the signature as typing a comma is.
+func wireSignatureHint(_ document: DocumentModel, provider: SemanticCompletionProvider) {
+    let textView = document.engine.textView
+    textView.onSignatureQuery = { [weak self, weak document] in
+        guard let self, let document else { return }
+        self.requestSignatureHint(document, provider: provider)
+    }
+}
+
+/// Asks for the signature of the enclosing call, or hides the hint.
+func requestSignatureHint(_ document: DocumentModel, provider: SemanticCompletionProvider) {
+    let textView = document.engine.textView
+    // Only while actually editing one document; a background tab must not open
+    // a floating hint over the one in front.
+    guard selectedDocument === document,
+          textView.selectedRange().length == 0 else {
+        textView.hideSignatureHint()
+        return
+    }
+    let caret = textView.selectedRange().location
+    guard CallContext.info(at: caret, in: document.text) != nil else {
+        textView.hideSignatureHint()
+        return
+    }
+    provider.signatureHelp(atOffset: caret, in: document.text,
+                           fileURL: document.semanticURL) { [weak self, weak document] signature, index in
+        guard let self, let document, self.selectedDocument === document,
+              document.engine.textView.selectedRange().location == caret else { return }
+        document.engine.textView.showSignatureHint(signature, activeParameter: index)
+    }
+}
+
 /// Connects the predicted-continuation hook for one document.
 ///
 /// The model answers asynchronously, so nothing is shown until it replies; a
@@ -96,15 +131,6 @@ public func pullInlineModel(progress: @escaping (Double?, String) -> Void,
     }
 }
 
-/// True while the in-process acceptance checks are running.
-///
-/// Those checks open throwaway documents containing deliberate mistakes, so
-/// anything learned from them is junk in the user's own suggestion data.
-static var isSelfTestRun: Bool {
-    guard let path = ProcessInfo.processInfo.environment["RIDECPP_SELFTEST"] else { return false }
-    return !path.isEmpty
-}
-
 /// Saves every modified document that has a real path.
 func saveDirtyDocuments() {
     for document in documents where document.isDirty && document.fileURL != nil {
@@ -112,7 +138,6 @@ func saveDirtyDocuments() {
     }
 }
 
-/// Shows the find bar, searching the focused document.
 public func showFind(replacing: Bool) {
     guard let document = selectedDocument else { return }
     find.documentProvider = { [weak self] in self?.selectedDocument }

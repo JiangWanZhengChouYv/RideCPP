@@ -58,6 +58,8 @@ public final class CodeTextView: NSTextView {
         // Tells the owner the text advanced, so an answer still in flight for the
         // old text can be recognised and dropped.
         onDocumentRevisionChanged?()
+        // A new character changes the argument being typed.
+        onSignatureQuery?()
         scheduleSuggestionRequest()
     }
 
@@ -69,6 +71,8 @@ public final class CodeTextView: NSTextView {
     private var diagnostics: [InlineDiagnostic] = []
     /// Character ranges currently painted as search matches.
     var findHighlightRanges: [NSRange] = []
+    /// Floating parameter hint, if one is visible.
+    var signatureHintPanel: NSPanel?
     /// Read-only view of the current underlines, for tests and diagnostics panels.
     public var diagnosticsForTesting: [InlineDiagnostic] { diagnostics }
     /// Floating hover hint, if one is visible.
@@ -890,6 +894,8 @@ public final class CodeTextView: NSTextView {
     public var onAcceptSuggestion: (() -> Void)?
     /// Called after every edit, so in-flight predictions can be invalidated.
     public var onDocumentRevisionChanged: (() -> Void)?
+    /// Called when the caret moves or text changes, to refresh the parameter hint.
+    public var onSignatureQuery: (() -> Void)?
     /// Pending prediction request.
     var pendingSuggestionWork: DispatchWorkItem?
 

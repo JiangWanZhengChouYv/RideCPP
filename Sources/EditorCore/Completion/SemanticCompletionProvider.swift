@@ -88,6 +88,45 @@ public final class SemanticCompletionProvider: CompletionProviding {
         }
     }
 
+    /// The signature of the call the caret is inside, if any.
+    ///
+    /// Delegates the "am I inside a call" decision to `CallContext`, which is
+    /// testable, so this method only has to convert offsets and forward.
+    public func signatureHelp(atOffset offset: Int, in text: String, fileURL: URL?,
+                              completion: @escaping (LSPSignature?, Int) -> Void) {
+        guard let context = CallContext.info(at: offset, in: text) else {
+            completion(nil, 0)
+            return
+        }
+        let url = fileURL ?? FileManager.default.temporaryDirectory
+            .appendingPathComponent("RideCPP-untitled.cpp")
+        let ns = text as NSString
+        let clamped = min(max(0, offset), ns.length)
+        let prefix = ns.substring(to: clamped)
+        let lines = prefix.components(separatedBy: "\n")
+        let position = LSPPosition(line: max(0, lines.count - 1),
+                                   character: (lines.last as NSString?)?.length ?? 0)
+        let index = context.argumentIndex
+        let uri = "file://" + url.path
+        // One retry: the first request can arrive while clangd is still opening
+        // the document, which answers with an empty list rather than waiting.
+        func attempt(_ remaining: Int) {
+            session.requestSignatureHelp(uri: uri, position: position) { [weak self] signatures in
+                if signatures.isEmpty, remaining > 0 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        attempt(remaining - 1)
+                    }
+                    return
+                }
+                DispatchQueue.main.async {
+                    completion(signatures.first, index)
+                }
+                _ = self
+            }
+        }
+        attempt(1)
+    }
+
     /// Definition location for the symbol at a character offset.
     public func definition(atOffset offset: Int, in text: String, fileURL: URL?,
                            completion: @escaping ([LSPLocation]) -> Void) {

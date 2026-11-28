@@ -312,6 +312,9 @@ public final class AppState: ObservableObject {
         }
     }
 
+    /// True during the acceptance checks, which must not learn from test files.
+    static var isSelfTestRun: Bool { ProcessInfo.processInfo.environment["RIDECPP_SELFTEST"] != nil }
+
     /// Called from `applicationShouldTerminate` so quitting can cancel.
     public func confirmQuit() -> NSApplication.TerminateReply {
         let dirty = documents.filter(\.isDirty)
@@ -328,6 +331,10 @@ public final class AppState: ObservableObject {
     // MARK: - Updates
 
     /// In-app update flow, owned by its own controller.
+    /// Local model status and the models installed on the server, for settings.
+    @Published public internal(set) var ollamaAvailability: OllamaClient.Availability?
+    @Published public internal(set) var availableInlineModels: [String] = []
+
     /// The in-app updater.
     ///
     /// `ContentView` observes `AppState`, not this controller, so the banner is
@@ -345,15 +352,15 @@ public final class AppState: ObservableObject {
         return controller
     }()
 
-    /// Find and replace for the focused document.
-    ///
-    /// Created eagerly: the menu items need it before the find bar has ever been
-    /// shown, and it holds no document until asked.
-    @Published public internal(set) var find = FindModel()
+    /// Find and replace for the focused document. Not `@Published`: the model is
+    /// an ObservableObject the bar observes directly, and publishing it as well
+    /// would invalidate every view on each keystroke in the find field.
+    public let find = FindModel()
 
-    /// Bumped whenever the updater's state changes; see `updates`.
+    /// Bumped when the updater changes; see `updates`.
     @Published public private(set) var updateRevision = 0
     private var updateSubscription: AnyCancellable?
+
 
     // MARK: - Undo / redo
 
@@ -397,10 +404,6 @@ public final class AppState: ObservableObject {
     let ollama = OllamaClient()
     /// Model to use, once one has been found on the server.
     @Published public internal(set) var inlineModelName: String?
-    /// What the local model situation is, for the settings UI.
-    @Published public internal(set) var ollamaAvailability: OllamaClient.Availability?
-    /// Code models installed on the server, offered in the settings picker.
-    @Published public internal(set) var availableInlineModels: [String] = []
     /// Bumped per request so a late answer cannot overwrite a newer one.
     var inlineSuggestionGeneration = 0
     /// In-flight model download.
@@ -518,6 +521,7 @@ public final class AppState: ObservableObject {
             }
             provider.syncDocument(text: document.text, fileURL: document.semanticURL)
             wireHoverAndNavigation(document, provider: provider)
+            wireSignatureHint(document, provider: provider)
         }
         wireInlineSuggestion(document)
     }
