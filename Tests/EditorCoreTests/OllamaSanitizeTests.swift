@@ -11,9 +11,11 @@ final class OllamaSanitizeTests: XCTestCase {
     func testKeepsAGenuineContinuation() {
         XCTAssertEqual(clean(" (int i = 0; i < n; ++i) {", typed: "for"),
                        " (int i = 0; i < n; ++i) {")
-        XCTAssertEqual(clean(" >> n >> m;", typed: "cin"), ">> n >> m;")
+        XCTAssertEqual(clean(" >> n >> m;", typed: "cin"), " >> n >> m;")
+        // `sort` needs the space before its parenthesis, and the model's own
+        // padding is replaced by exactly one.
         XCTAssertEqual(clean("(a.begin(), a.end());", typed: "sort"),
-                       "(a.begin(), a.end());")
+                       " (a.begin(), a.end());")
     }
 
     /// The failure the user actually saw: `wh` answered with a whole new
@@ -70,5 +72,21 @@ final class OllamaSanitizeTests: XCTestCase {
         XCTAssertFalse(OllamaClient.continuesLine("int a[n];", typedWord: "for"))
         // A full identifier followed by more of itself is not a continuation.
         XCTAssertFalse(OllamaClient.continuesLine("sort(a, b);", typedWord: "sort"))
+    }
+
+    /// The server terminates some answers with a carriage return; inserting it
+    /// breaks the line.
+    func testCarriageReturnIsRemoved() {
+        XCTAssertEqual(clean(">> n;\r", typed: "cin"), " >> n;")
+        XCTAssertFalse(clean(" (a);\r\n", typed: "sort").contains("\r"))
+    }
+
+    /// C++ requires the space: `cin >> n;` and `for (`, not `cin>>` or `for(`.
+    func testRequiredSpacesAreRestored() {
+        XCTAssertEqual(clean(">> n;", typed: "cin"), " >> n;")
+        XCTAssertEqual(clean("(int i = 0; i < n; ++i) {", typed: "for"),
+                       " (int i = 0; i < n; ++i) {")
+        // A word continuation must not gain one.
+        XCTAssertEqual(clean("ile (cin >> n) {", typed: "wh"), "ile (cin >> n) {")
     }
 }

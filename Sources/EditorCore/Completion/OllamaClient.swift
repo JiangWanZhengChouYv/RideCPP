@@ -227,11 +227,12 @@ public final class OllamaClient {
         for marker in ["```cpp", "```c++", "```c", "```"] {
             text = text.replacingOccurrences(of: marker, with: "")
         }
+        // The server terminates some answers with a carriage return; inserting it
+        // turns the suggestion into a line break.
+        text = text.replacingOccurrences(of: "\r", with: "")
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "" }
-        // Small models pad their output with spaces. Leading spaces are not part of
-        // the continuation unless the line's syntax needs them, and those are
-        // re-added below.
-        let hadLeadingSpace = text.hasPrefix(" ")
+        // Small models pad their output with spaces. The ones C++ requires are
+        // re-added below, so none is carried over blindly.
         text = String(text.drop { $0 == " " || $0 == "\t" })
 
         // A leading newline means "continue on the next line", which is a normal
@@ -261,9 +262,12 @@ public final class OllamaClient {
                 }
             }
             guard continuesLine(text, typedWord: typedWord) else { return "" }
-            // `for` needs a space before its parenthesis; the model's own padding
-            // was stripped above, so it is restored deliberately and only once.
-            if hadLeadingSpace, text.hasPrefix("(") {
+            // `for` needs a space before its parenthesis, and `cin` before `>>`.
+            // The model's own padding was stripped above, so it is restored
+            // deliberately, once, where C++ requires it.
+            let needsSpace = text.hasPrefix("(") || text.hasPrefix(">>")
+                || text.hasPrefix("<<") || text.hasPrefix("{")
+            if needsSpace {
                 text = " " + text
             }
             let lines = text.components(separatedBy: "\n")

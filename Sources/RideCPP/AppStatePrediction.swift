@@ -40,8 +40,17 @@ public func refreshOllamaAvailability() {
         switch availability {
         case .ready(let model):
             self.inlineModelName = model
+            // Every installed code model is offered in settings; without this the
+            // picker only ever showed the one that happened to be active.
+            let installed = self.ollama.availableModels
+            let codeModels = installed.filter {
+                let lower = $0.lowercased()
+                return lower.contains("coder") || lower.contains("code")
+            }
+            self.availableInlineModels = codeModels.sorted()
         case .notInstalled, .notRunning, .modelMissing:
             self.inlineModelName = nil
+            self.availableInlineModels = []
         }
     }
 }
