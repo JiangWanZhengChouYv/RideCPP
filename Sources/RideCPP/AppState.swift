@@ -87,8 +87,10 @@ public final class AppState: ObservableObject {
             .map { URL(fileURLWithPath: $0) }
             .filter { FileManager.default.fileExists(atPath: $0.path) }
 
-        // Look for a newer release in the background; failures are silent.
+        // Look for a newer release in the background; failures are silent. Also
+        // keeps checking while the app stays open.
         updates.checkAutomatically()
+        updates.startPeriodicChecks()
 
         // Load the remembered symbol store, then keep learning from each document.
         DispatchQueue.global(qos: .utility).async {

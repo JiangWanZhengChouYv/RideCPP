@@ -28,13 +28,19 @@ public final class UpdateController: ObservableObject {
     @Published public private(set) var available: ReleaseInfo?
 
     private var downloader: UpdateDownloader?
+    /// Repeats the automatic check while the app runs.
+    private var periodicTimer: Timer?
     private let currentVersion: () -> SemanticVersion
     /// Saves documents before the relaunch; supplied by the app state.
     private let prepareForRelaunch: () -> Void
 
     /// Automatic checks are throttled: GitHub allows 60 unauthenticated API calls
     /// per hour, which a check on every launch would exhaust.
-    static let automaticCheckInterval: TimeInterval = 6 * 60 * 60
+    ///
+    /// One hour is 24 calls a day — far inside that limit — and means a release
+    /// published during the day is noticed the same day rather than up to six
+    /// hours later.
+    static let automaticCheckInterval: TimeInterval = UpdateThrottle.interval
     static let lastCheckKey = "update.lastAutomaticCheck"
 
     public init(currentVersion: @escaping () -> SemanticVersion,
@@ -47,9 +53,22 @@ public final class UpdateController: ObservableObject {
 
     public func checkAutomatically() {
         let last = UserDefaults.standard.double(forKey: Self.lastCheckKey)
-        let elapsed = Date().timeIntervalSince1970 - last
-        if last > 0, elapsed >= 0, elapsed < Self.automaticCheckInterval { return }
+        guard UpdateThrottle.shouldCheck(lastCheck: last,
+                                         now: Date().timeIntervalSince1970) else { return }
         check(userInitiated: false)
+    }
+
+    /// Re-checks periodically while the app stays open.
+    ///
+    /// `checkAutomatically()` only runs at launch, so an app left running for days
+    /// never noticed a new release. The timer calls the same throttled entry point,
+    /// so the GitHub rate limit still holds.
+    public func startPeriodicChecks(interval: TimeInterval = 30 * 60) {
+        periodicTimer?.invalidate()
+        periodicTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) {
+            [weak self] _ in
+            self?.checkAutomatically()
+        }
     }
 
     /// Looks for a newer release. Calls back with an error only for user-initiated
