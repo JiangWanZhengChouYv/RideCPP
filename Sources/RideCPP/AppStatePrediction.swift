@@ -95,4 +95,20 @@ public func pullInlineModel(progress: @escaping (Double?, String) -> Void,
         tv.showSuggestion(text)
     }
 }
+
+/// True while the in-process acceptance checks are running.
+///
+/// Those checks open throwaway documents containing deliberate mistakes, so
+/// anything learned from them is junk in the user's own suggestion data.
+static var isSelfTestRun: Bool {
+    guard let path = ProcessInfo.processInfo.environment["RIDECPP_SELFTEST"] else { return false }
+    return !path.isEmpty
+}
+
+/// Saves every modified document that has a real path.
+func saveDirtyDocuments() {
+    for document in documents where document.isDirty && document.fileURL != nil {
+        _ = save(document: document)
+    }
+}
 }

@@ -505,4 +505,45 @@ extension SelfTestRunner {
                "first=\(first) flagAt=\(flagIndex.map(String.init) ?? "-") top=\(ranked.prefix(4).map(\.text))")
         tv.string = ""
     }
+
+    /// A manual update check must actually reach the UI.
+    ///
+    /// The banner reads `state.updates.available`, but `ContentView` observes
+    /// `AppState` rather than the controller, so without `updateRevision` being
+    /// republished the check found the release and nothing redrew — the menu item
+    /// looked dead.
+    func checkUpdateBannerReachesTheUI(_ state: AppState) async {
+        let controller = state.updates
+        let before = state.updateRevision
+        // Any change to the controller must bump the revision.
+        controller.dismiss()
+        for _ in 0..<10 { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline, state.updateRevision == before {
+            for _ in 0..<5 { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        record("update-changes-are-observed",
+               state.updateRevision != before,
+               "revision \(before) -> \(state.updateRevision)")
+
+        // A released version must see the newer one. The running build is the
+        // newest, so it cannot compare against itself; 1.1.2 is the check that
+        // matters — that is what users have installed.
+        do {
+            let older = SemanticVersion("1.1.2(1)")!
+            let release = try await UpdateChecker.checkForUpdate(current: older)
+            record("update-check-finds-newer-release",
+                   release != nil,
+                   "1.1.2(1) -> \(release?.tag ?? "none")")
+            // And the current build must not offer itself.
+            let selfCheck = try await UpdateChecker.checkForUpdate(current: SemanticVersion.current())
+            record("update-check-does-not-self-offer",
+                   selfCheck == nil,
+                   "current=\(SemanticVersion.current()) -> \(selfCheck?.tag ?? "none")")
+        } catch {
+            record("update-check-finds-newer-release", false,
+                   "error=\(escaped(error.localizedDescription))")
+        }
+    }
 }

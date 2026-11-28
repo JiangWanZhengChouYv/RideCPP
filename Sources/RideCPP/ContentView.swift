@@ -32,7 +32,11 @@ struct ContentView: View {
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
                 Divider()
             }
+            // `updateRevision` is read so this body re-runs when the updater
+            // changes: `state.updates` is not itself observed, so without it the
+            // banner never appeared even though `available` was set.
             if let update = state.updates.available {
+                let _ = state.updateRevision
                 updateBanner(update)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }

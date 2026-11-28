@@ -310,15 +310,6 @@ public final class AppState: ObservableObject {
         }
     }
 
-    /// True while the in-process acceptance checks are running.
-    ///
-    /// Those checks open throwaway documents containing deliberate mistakes, so
-    /// anything learned from them is junk in the user's own suggestion data.
-    static var isSelfTestRun: Bool {
-        guard let path = ProcessInfo.processInfo.environment["RIDECPP_SELFTEST"] else { return false }
-        return !path.isEmpty
-    }
-
     /// Called from `applicationShouldTerminate` so quitting can cancel.
     public func confirmQuit() -> NSApplication.TerminateReply {
         let dirty = documents.filter(\.isDirty)
@@ -335,17 +326,26 @@ public final class AppState: ObservableObject {
     // MARK: - Updates
 
     /// In-app update flow, owned by its own controller.
-    public lazy var updates: UpdateController = UpdateController(
-        currentVersion: { SemanticVersion.current() },
-        prepareForRelaunch: { [weak self] in self?.saveDirtyDocuments() }
-    )
-
-    /// Saves every modified document that has a real path.
-    private func saveDirtyDocuments() {
-        for document in documents where document.isDirty && document.fileURL != nil {
-            _ = save(document: document)
+    /// The in-app updater.
+    ///
+    /// `ContentView` observes `AppState`, not this controller, so the banner is
+    /// driven by `updateRevision`; without that signal a successful check set
+    /// `updates.available` and nothing redrew, which made "Check for Updates"
+    /// look broken.
+    public private(set) lazy var updates: UpdateController = {
+        let controller = UpdateController(
+            currentVersion: { SemanticVersion.current() },
+            prepareForRelaunch: { [weak self] in self?.saveDirtyDocuments() }
+        )
+        updateSubscription = controller.objectWillChange.sink { [weak self] _ in
+            DispatchQueue.main.async { self?.updateRevision &+= 1 }
         }
-    }
+        return controller
+    }()
+
+    /// Bumped whenever the updater's state changes; see `updates`.
+    @Published public private(set) var updateRevision = 0
+    private var updateSubscription: AnyCancellable?
 
     // MARK: - Undo / redo
 

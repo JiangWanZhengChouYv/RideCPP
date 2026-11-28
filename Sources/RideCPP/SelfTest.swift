@@ -409,6 +409,7 @@ final class SelfTestRunner {
                "first=\(errors.first.map { "\($0.line):\($0.column) \($0.message)" } ?? "none")")
         await checkProblemsPanel(state, view: view)
         await checkInlinePrediction(state, view: view)
+        await checkUpdateBannerReachesTheUI(state)
 
     }
 
