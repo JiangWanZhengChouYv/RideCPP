@@ -88,4 +88,7 @@ extension AppState {
 extension AppState {
     /// Most recent set, whether or not it has been painted yet.
     nonisolated(unsafe) static var lastComputed: [UUID: [CodeTextView.InlineDiagnostic]] = [:]
+
+    /// Debounced inlay-label refresh, shared by every document.
+    nonisolated(unsafe) static var pendingInlayRefresh: DispatchWorkItem?
 }

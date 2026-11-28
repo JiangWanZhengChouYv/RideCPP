@@ -21,8 +21,24 @@ func wireInlayHints(_ document: DocumentModel, provider: SemanticCompletionProvi
     let textView = document.engine.textView
     textView.onInlayHintQuery = { [weak self, weak document] in
         guard let self, let document, self.selectedDocument === document else { return }
+        self.scheduleInlayHintRefresh(document, provider: provider)
+    }
+}
+
+/// Debounces the label refresh while typing.
+///
+/// Rebuilding the labels on every keystroke rewrote the display text under the
+/// caret dozens of times a second; the caret survived, but any refresh landing
+/// between a keypress and its handling moved it. Waiting for the typing to settle
+/// also matches how the labels are useful: nobody reads `name:` mid-syllable.
+func scheduleInlayHintRefresh(_ document: DocumentModel, provider: SemanticCompletionProvider) {
+    AppState.pendingInlayRefresh?.cancel()
+    let work = DispatchWorkItem { [weak self, weak document] in
+        guard let self, let document, self.selectedDocument === document else { return }
         self.requestInlayHints(document, provider: provider)
     }
+    AppState.pendingInlayRefresh = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
 }
 
 /// Asks for hints covering the visible lines, and shows them.

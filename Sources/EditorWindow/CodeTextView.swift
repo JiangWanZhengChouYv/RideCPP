@@ -51,10 +51,10 @@ public final class CodeTextView: NSTextView {
     /// the one place AppKit reports *every* edit — typing, deleting, pasting,
     /// undo, drag-and-drop and programmatic replacement alike.
     func notifyDocumentChanged() {
-        // Label attachments only belong to the display. Once the text changes the
-        // offsets they were placed at are wrong, and leaving them in would push
-        // the newly typed characters around.
-        removeLabels()
+        // Labels describe positions in the text that just changed, so their
+        // reserved space is released; the owner asks for fresh ones once the typing
+        // settles. Only attributes are dropped here — the text was never touched.
+        clearInlayHints()
         onDocumentSync?(currentSourceText(), documentFileURL)
         // A prediction describes the text it was made for; once that text
         // changes it is stale. Ask again after the user stops typing.
@@ -65,6 +65,8 @@ public final class CodeTextView: NSTextView {
         // A new character changes the argument being typed, and the labels that
         // describe it.
         onSignatureQuery?()
+        // Labels are rebuilt after the typing settles, not on every keystroke;
+        // see the debounce on the owner side.
         onInlayHintQuery?()
         scheduleSuggestionRequest()
     }
@@ -213,6 +215,7 @@ public final class CodeTextView: NSTextView {
         // remove the last typed character.
         endCurrentUndoGroup()
 
+        clearInlayHints()
         let selection = effectiveSelection(replacing: replacementRange)
         let outcome = EditPlanner.apply(.insert(typed), to: self.string, selection: selection, settings: editSettings)
 
@@ -528,6 +531,7 @@ public final class CodeTextView: NSTextView {
             super.insertNewline(sender)
             return
         }
+        clearInlayHints()
         apply(EditPlanner.apply(.newline, to: string, selection: selectedRange(), settings: editSettings))
     }
 
@@ -546,10 +550,12 @@ public final class CodeTextView: NSTextView {
         // Tab accepts the prediction when one is showing, and indents otherwise:
         // the ghost text is only ever what the single next key acts on.
         if acceptSuggestion() { return }
+        clearInlayHints()
         apply(EditPlanner.apply(.tab, to: string, selection: selectedRange(), settings: editSettings))
     }
 
     public override func insertBacktab(_ sender: Any?) {
+        clearInlayHints()
         apply(EditPlanner.apply(.backtab, to: string, selection: selectedRange(), settings: editSettings))
     }
 
@@ -558,6 +564,9 @@ public final class CodeTextView: NSTextView {
             super.deleteBackward(sender)
             return
         }
+        // Spacing attributes would be captured into the undo record alongside the
+        // text, which is what stopped ⌘Z from restoring the document.
+        clearInlayHints()
         apply(EditPlanner.apply(.deleteBackward, to: string, selection: selectedRange(), settings: editSettings))
         // Deleting a character changes the prefix being completed, so the list
         // must be re-filtered (and closed once the word is gone).
@@ -591,10 +600,12 @@ public final class CodeTextView: NSTextView {
     }
 
     @objc public func indentSelection(_ sender: Any?) {
+        clearInlayHints()
         apply(EditPlanner.apply(.tab, to: string, selection: selectedRange(), settings: editSettings))
     }
 
     @objc public func outdentSelection(_ sender: Any?) {
+        clearInlayHints()
         apply(EditPlanner.apply(.backtab, to: string, selection: selectedRange(), settings: editSettings))
     }
 
@@ -931,6 +942,7 @@ public final class CodeTextView: NSTextView {
     public override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         Self.drawDiagnosticSquiggles(in: self, dirtyRect: dirtyRect)
+        drawInlayLabels()
         drawInlineSuggestion()
     }
 

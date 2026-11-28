@@ -4,133 +4,160 @@ import EditorCore
 // MARK: - Inlay hints
 
 /// Draws clangd's advisory labels — `name:` on call arguments, `: int` on deduced
-/// types — inside the code the way CLion does, with the text pushed aside so the
-/// label sits in its own space.
+/// types — inside the code, with the text pushed aside so each label has room.
 ///
-/// Why attachments and not a drawing pass: TextKit will happily *paint* at a
-/// position, but it does not move anything aside for it, so a drawn label lands
-/// on top of the code. An `NSTextAttachment` is the only mechanism that makes the
-/// layout leave room.
+/// How the space is made matters. Putting attachments in the text storage works,
+/// but it puts characters into the document that are not in the file: every edit,
+/// undo entry and cursor position then has to be translated, and `NSTextStorage`
+/// edits made from outside the text view corrupt the undo stack outright.
 ///
-/// The attachments live in the *display* text storage and never in the document:
-/// the editor keeps the real text aside while hints are shown, so what gets saved,
-/// copied or compiled never contains them. Any edit drops the hints and restores
-/// the document exactly.
+/// A `.kern` attribute on a single existing character reserves the same width and
+/// changes no text at all. Attributes are also not part of the undo stack, so ⌘Z
+/// keeps undoing what the user typed. This is the approach CLion-style hints need:
+/// the layout is the only thing touched.
 extension CodeTextView {
 
-    /// Labels currently shown.
+    /// Labels currently reserving space.
     public var inlayHintItems: [InlayHintItem] { inlayState.items }
 
-    /// Shows `hints`, pushing the code aside to make room for each label.
+    /// Shows `hints`, reserving room for each label and drawing it in that room.
     public func setInlayHints(_ hints: [LSPInlayHint]) {
         showLabels(hints)
     }
 
-    /// Removes every label and restores the document text.
+    /// Removes every label and releases the reserved space.
     public func clearInlayHints() {
-        removeLabels()
+        releaseLabelSpace()
+        inlayState.items = []
+        needsDisplay = true
     }
 
-    /// True while labels occupy space in the display text.
-    var hasInlayLabelAttachments: Bool { inlayState.applied }
+    /// True while labels are on screen.
+    var hasInlayLabels: Bool { !inlayState.items.isEmpty }
+
+    /// The document's text; labels never change it now, but callers still use this
+    /// so the contract does not depend on that staying true.
+    public func currentSourceText() -> String { string }
 }
 
-/// One label to draw.
-public struct InlayHintItem: Equatable, Sendable {
-    /// Character offset of the original text the label sits before.
-    public let offset: Int
-    public let text: String
-    public let isParameter: Bool
-}
-
-// MARK: - Display/real text separation
+// MARK: - Reserving space
 
 extension CodeTextView {
 
-    /// The document text with the labels spliced in.
-    ///
-    /// Built fresh from `lastDisplayedSource` each time so a stale attachment can
-    /// never survive into a later render.
     func showLabels(_ hints: [LSPInlayHint]) {
-        let source = currentSourceText()
         guard !hints.isEmpty else {
-            removeLabels()
+            clearInlayHints()
             return
         }
-        let ns = source as NSString
-        let font = NSFont.systemFont(ofSize: max(9, (self.font?.pointSize ?? 13) - 1))
-        // Attachments are inserted back to front so earlier offsets stay valid.
-        let sorted = hints.compactMap { hint -> (Int, String)? in
+        let ns = string as NSString
+        let font = NSFont.systemFont(ofSize: max(9, (font?.pointSize ?? 13) - 1))
+        var items: [InlayHintItem] = []
+        for hint in hints {
             // clangd names anonymous members `u1`, `u2`, … and decorates them with
-            // the punctuation around them. Those read as `{&u1:` rather than a
-            // name, so they are dropped instead of shown.
-            guard let readable = Self.readableLabel(hint.text) else { return nil }
-            guard let offset = Self.utf16Offset(of: hint.position, in: ns) else { return nil }
-            return (offset, readable)
-        }.sorted { $0.0 > $1.0 }
-
-        let display = NSMutableAttributedString(string: source, attributes: [
-            .font: self.font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
-            .foregroundColor: textColor ?? NSColor.labelColor
-        ])
-        var inserted: [(offset: Int, text: String)] = []
-        for (offset, text) in sorted {
-            let attachment = NSTextAttachment()
-            attachment.attachmentCell = InlayHintCell(label: text, hintFont: font)
-            display.insert(NSAttributedString(attachment: attachment), at: offset)
-            inserted.append((offset, text))
+            // the punctuation around them; those read as noise, not as a name.
+            guard let label = Self.readableLabel(hint.text),
+                  let offset = Self.utf16Offset(of: hint.position, in: ns) else { continue }
+            let width = (label as NSString).size(withAttributes: [.font: font]).width + 3
+            items.append(InlayHintItem(offset: offset, text: label, width: ceil(width)))
         }
-
-        // Remember the real text *before* swapping, so it can be restored.
-        if !inlayState.applied {
-            inlayState.sourceText = source
-        }
-        inlayState.applied = true
-        inlayState.items = inserted.reversed().map {
-            InlayHintItem(offset: $0.offset, text: $0.text, isParameter: $0.text.hasSuffix(":"))
-        }
-
-        let selection = selectedRange()
-        silentlyReplaceDisplayText(display)
-        // The caret sat before `offset` attachments; move it past the ones that
-        // were inserted before it so it stays where the user put it.
-        let shift = inserted.filter { $0.offset < selection.location }.count
-        setSelectedRange(NSRange(location: min(selection.location + shift, (string as NSString).length),
-                                 length: selection.length))
+        items.sort { $0.offset < $1.offset }
+        inlayState.items = items
+        reserveSpace()
+        needsDisplay = true
     }
 
-    /// Puts the document text back and drops every label.
-    func removeLabels() {
-        guard inlayState.applied else { return }
-        inlayState.applied = false
-        inlayState.items = []
-        guard let original = inlayState.sourceText else { return }
-        inlayState.sourceText = nil
-        // Only restore if the display has not drifted; an edit already re-synced.
-        let selection = selectedRange()
-        silentlyReplaceDisplayText(NSAttributedString(string: original, attributes: [
-            .font: self.font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
-            .foregroundColor: textColor ?? NSColor.labelColor
-        ]))
-        setSelectedRange(NSRange(location: min(selection.location, (original as NSString).length),
-                                 length: 0))
-    }
-
-    /// Replaces the storage without notifying undo, the delegate, or the app.
+    /// Puts a kern on the character preceding each label.
     ///
-    /// Labels are cosmetic, so this must not look like an edit: no dirty flag, no
-    /// undo entry, no unsaved-changes prompt.
-    private func silentlyReplaceDisplayText(_ attributed: NSAttributedString) {
-        guard let textStorage else { return }
-        textStorage.beginEditing()
-        textStorage.replaceCharacters(in: NSRange(location: 0, length: textStorage.length),
-                                      with: attributed)
-        textStorage.endEditing()
+    /// Kern is applied to the *previous* character so the label reads as sitting
+    /// immediately before the token it describes. A label at the very start of a
+    /// line has no preceding character, so it is skipped rather than kerned onto
+    /// the line above.
+    func reserveSpace() {
+        guard let storage = textStorage else { return }
+        let length = storage.length
+        // An attribute change is not an edit: it keeps the text and the undo stack
+        // as they are, which a temporary attribute fails to do here — TextKit does
+        // not relayout for a temporary `.kern`, so the glyphs never move and the
+        // label lands on the code.
+        withoutUndoOnStorage {
+            if length > 0 {
+                storage.removeAttribute(.kern, range: NSRange(location: 0, length: length))
+            }
+            let text = string as NSString
+            for item in inlayState.items {
+                let anchor = item.offset - 1
+                guard anchor >= 0, anchor < length else { continue }
+                // A newline has no glyph to carry spacing.
+                guard text.character(at: anchor) != 10 else { continue }
+                storage.addAttribute(.kern, value: item.width,
+                                     range: NSRange(location: anchor, length: 1))
+            }
+        }
+        if length > 0 {
+            layoutManager?.invalidateLayout(forCharacterRange: NSRange(location: 0, length: length),
+                                            actualCharacterRange: nil)
+        }
     }
 
-    /// The document's text, ignoring any attachment currently in the display.
-    public func currentSourceText() -> String {
-        inlayState.applied ? (inlayState.sourceText ?? string) : string
+    /// Runs `body` with undo registration off and outside the current group.
+    ///
+    /// An attribute edit would otherwise be folded into the group the user's typing
+    /// is in, which made one ⌘Z undo only part of an edit.
+    private func withoutUndoOnStorage(_ body: () -> Void) {
+        guard let manager = undoManager else {
+            body()
+            return
+        }
+        var reopened = 0
+        while manager.groupingLevel > 0 {
+            manager.endUndoGrouping()
+            reopened += 1
+        }
+        manager.disableUndoRegistration()
+        body()
+        manager.enableUndoRegistration()
+        for _ in 0..<reopened { manager.beginUndoGrouping() }
+    }
+
+    /// Drops the reserved space.
+    func releaseLabelSpace() {
+        // Nothing reserved: touching the storage here would be a pointless
+        // attribute edit on every keystroke.
+        guard !inlayState.items.isEmpty, let storage = textStorage, storage.length > 0 else { return }
+        withoutUndoOnStorage {
+            storage.removeAttribute(.kern, range: NSRange(location: 0, length: storage.length))
+        }
+        layoutManager?.invalidateLayout(forCharacterRange: NSRange(location: 0, length: storage.length),
+                                        actualCharacterRange: nil)
+    }
+
+    /// Draws each label into the space reserved for it.
+    func drawInlayLabels() {
+        guard !inlayState.items.isEmpty,
+              let layoutManager, let container = textContainer else { return }
+        let base = font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let labelFont = NSFont.systemFont(ofSize: max(9, base.pointSize - 1))
+        let origin = textContainerOrigin
+        let text = string as NSString
+        for item in inlayState.items {
+            let anchor = item.offset - 1
+            guard anchor >= 0, anchor < text.length, text.character(at: anchor) != 10 else { continue }
+            // Draw inside the gap the kern opened. Measured layout: the gap runs
+            // from the anchor glyph's origin to the next glyph's origin, and the
+            // anchor character still occupies its own advance at the start of it —
+            // so the label begins one advance past the anchor, not at its origin.
+            let glyph = layoutManager.glyphIndexForCharacter(at: anchor)
+            let fragment = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+            let anchorOrigin = layoutManager.location(forGlyphAt: glyph).x
+            let anchorWidth = (text.substring(with: NSRange(location: anchor, length: 1)) as NSString)
+                .size(withAttributes: [.font: base]).width
+            let x = origin.x + anchorOrigin + anchorWidth + 1
+            let y = origin.y + fragment.minY + (fragment.height - labelFont.ascender) / 2
+            _ = base
+            (item.text as NSString).draw(at: NSPoint(x: x, y: y),
+                                         withAttributes: [.font: labelFont,
+                                                          .foregroundColor: EditorTheme.inlayHint])
+        }
     }
 
     /// UTF-16 offset of an LSP position.
@@ -147,52 +174,12 @@ extension CodeTextView {
         let result = index + position.character
         return result <= text.length ? result : nil
     }
-}
 
-/// Draws a grey label in the space an attachment occupies.
-final class InlayHintCell: NSTextAttachmentCell {
-
-    private let label: String
-    private let hintFont: NSFont
-
-    init(label: String, hintFont: NSFont) {
-        self.label = label
-        self.hintFont = hintFont
-        super.init()
-    }
-
-    required init(coder: NSCoder) { fatalError("not used") }
-
-    override func cellSize() -> NSSize {
-        let size = (label as NSString).size(withAttributes: [.font: hintFont])
-        // A little breathing room so the label does not touch the code it precedes.
-        return NSSize(width: ceil(size.width) + 2, height: ceil(size.height))
-    }
-
-    override func cellBaselineOffset() -> NSPoint {
-        NSPoint(x: 0, y: -2)
-    }
-
-    override func draw(withFrame cellFrame: NSRect, in controlView: NSView?) {
-        (label as NSString).draw(at: NSPoint(x: cellFrame.minX, y: cellFrame.minY),
-                                 withAttributes: [.font: hintFont,
-                                                  .foregroundColor: EditorTheme.inlayHint])
-    }
-}
-
-/// Mutable inlay-label state, kept beside the view.
-final class InlayHintState {
-    var items: [InlayHintItem] = []
-    var applied = false
-    var sourceText: String?
-}
-
-extension CodeTextView {
     /// Trims a hint label to what is worth showing.
     ///
-    /// clangd wraps synthetic names in the surrounding punctuation — `{&u1:` for
-    /// an anonymous pair member — and reuses names like `u1` that mean nothing to
-    /// a reader. Returning nil drops the label entirely.
+    /// clangd wraps synthetic names in the surrounding punctuation — `{&u1:` for an
+    /// anonymous pair member — and reuses names like `u1` that mean nothing to a
+    /// reader. Returning nil drops the label entirely.
     static func readableLabel(_ raw: String) -> String? {
         let trimmed = raw.trimmingCharacters(in: CharacterSet(charactersIn: "{}&* "))
         guard !trimmed.isEmpty else { return nil }
@@ -202,4 +189,18 @@ extension CodeTextView {
         }
         return trimmed
     }
+}
+
+/// One label to draw.
+public struct InlayHintItem: Equatable, Sendable {
+    /// Character offset the label sits before.
+    public let offset: Int
+    public let text: String
+    /// Space reserved for it, in points.
+    public let width: CGFloat
+}
+
+/// Mutable inlay-label state, kept beside the view.
+final class InlayHintState {
+    var items: [InlayHintItem] = []
 }
