@@ -88,6 +88,52 @@ public final class SemanticCompletionProvider: CompletionProviding {
         }
     }
 
+    /// Renames the symbol at an offset.
+    ///
+    /// Returns the edits that touch `text`'s own file; edits in other files are
+    /// reported separately so the caller can decide what to do with them.
+    public func rename(atOffset offset: Int, in text: String, to newName: String,
+                       fileURL: URL?,
+                       completion: @escaping (Result<[LSPTextEdit], Error>) -> Void) {
+        let url = fileURL ?? FileManager.default.temporaryDirectory
+            .appendingPathComponent("RideCPP-untitled.cpp")
+        let ns = text as NSString
+        let clamped = min(max(0, offset), ns.length)
+        let prefix = ns.substring(to: clamped)
+        let lines = prefix.components(separatedBy: "\n")
+        let position = LSPPosition(line: max(0, lines.count - 1),
+                                   character: (lines.last as NSString?)?.length ?? 0)
+        let ownPath = url.resolvingSymlinksInPath().path
+        func attempt(_ remaining: Int) {
+            session.requestRename(uri: "file://" + url.path, position: position,
+                                  newName: newName) { [weak self] result in
+                switch result {
+                case .failure(let error):
+                    // The document may still be opening; try once more before
+                    // giving up, the way the signature request does.
+                    if remaining > 0 {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                            attempt(remaining - 1)
+                        }
+                    } else {
+                        DispatchQueue.main.async { completion(.failure(error)) }
+                    }
+                case .success(let edits):
+                    let own = edits.filter { $0.path == ownPath || $0.path == url.path }
+                    if own.isEmpty, remaining > 0 {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                            attempt(remaining - 1)
+                        }
+                    } else {
+                        DispatchQueue.main.async { completion(.success(own)) }
+                    }
+                }
+                _ = self
+            }
+        }
+        attempt(1)
+    }
+
     /// The signature of the call the caret is inside, if any.
     ///
     /// Delegates the "am I inside a call" decision to `CallContext`, which is

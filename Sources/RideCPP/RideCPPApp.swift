@@ -123,6 +123,8 @@ struct AppCommands: Commands {
             Button(L10n.t("edit.goToDefinition")) { state.goToDefinition() }
                 .keyboardShortcut("d", modifiers: [.command])
                 .disabled(!state.semanticCompletionReady)
+            Button(L10n.t("edit.rename")) { state.renameSymbolAtCaret() }
+                .disabled(!state.semanticCompletionReady || state.selectedDocument == nil)
             Button(L10n.t("edit.fixDiagnostic")) { state.fixDiagnosticAtCaret() }
                 .keyboardShortcut(".", modifiers: [.command, .option])
                 .disabled(!state.semanticCompletionReady || !state.canFixDiagnostic)

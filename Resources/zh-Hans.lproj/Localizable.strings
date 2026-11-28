@@ -228,3 +228,13 @@
 "find.replaceAll" = "全部替换";
 "find.menu.find" = "查找…";
 "find.menu.replace" = "查找与替换…";
+
+"rename.title" = "重命名符号";
+"rename.message" = "文件中所有引用会一起改名。";
+"rename.placeholder" = "新名称";
+"rename.ok" = "重命名";
+"rename.cancel" = "取消";
+"status.noSymbolHere" = "请先把光标放在标识符上";
+"status.renamed" = "已重命名 %d 处";
+
+"edit.rename" = "重命名符号";

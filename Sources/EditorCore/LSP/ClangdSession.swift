@@ -466,6 +466,64 @@ public final class ClangdSession {
 
     // MARK: - Navigation
 
+    /// Asks the server to rename the symbol at `position`.
+    ///
+    /// clangd answers with a workspace edit: the new text plus every range that
+    /// must change, in every file. Collecting them into one list rather than
+    /// applying them here keeps the edit undoable as a single operation.
+    public func requestRename(uri: String,
+                              position: LSPPosition,
+                              newName: String,
+                              completion: @escaping (Result<[LSPTextEdit], Error>) -> Void) {
+        sendRequest(method: "textDocument/rename", params: [
+            "textDocument": ["uri": uri],
+            "position": ["line": position.line, "character": position.character],
+            "newName": newName
+        ]) { result in
+            switch result {
+            case .failure(let error):
+                completion(.failure(error))
+            case .success(let value):
+                completion(.success(Self.textEdits(fromWorkspaceEdit: value)))
+            }
+        }
+    }
+
+    /// Flattens a `WorkspaceEdit` into per-file edits, deduplicated.
+    ///
+    /// clangd can report the same range twice under two spellings of the path —
+    /// `/tmp/x.cpp` and `/private/tmp/x.cpp` are the same file through the
+    /// symlink on macOS — so edits are keyed by the resolved path and identical
+    /// ranges are dropped.
+    static func textEdits(fromWorkspaceEdit value: Any) -> [LSPTextEdit] {
+        guard let object = value as? [String: Any] else { return [] }
+        var byFile: [String: [String: LSPTextEdit]] = [:]
+        func add(uri: String, entry: [String: Any]) {
+            guard let newText = entry["newText"] as? String,
+                  let range = range(from: entry["range"]) else { return }
+            let path = uri.hasPrefix("file://")
+                ? URL(fileURLWithPath: String(uri.dropFirst("file://".count))).resolvingSymlinksInPath().path
+                : uri
+            // Keyed by range so a duplicate report of the same edit collapses.
+            let key = "\(range.start.line):\(range.start.character)-\(range.end.line):\(range.end.character)"
+            byFile[path, default: [:]][key] = LSPTextEdit(path: path, range: range, newText: newText)
+        }
+        if let changes = object["changes"] as? [String: [[String: Any]]] {
+            for (uri, entries) in changes {
+                for entry in entries { add(uri: uri, entry: entry) }
+            }
+        }
+        if let documentChanges = object["documentChanges"] as? [[String: Any]] {
+            for change in documentChanges {
+                guard let textDocument = change["textDocument"] as? [String: Any],
+                      let uri = textDocument["uri"] as? String,
+                      let edits = change["edits"] as? [[String: Any]] else { continue }
+                for entry in edits { add(uri: uri, entry: entry) }
+            }
+        }
+        return byFile.values.flatMap { $0.values }
+    }
+
     /// Asks the server for the declaration/definition at a position.
     ///
     /// Returns every location the server reports, so a symbol declared in a header
@@ -945,5 +1003,19 @@ public struct LSPSignature: Sendable, Equatable {
     public init(label: String, parameters: [Parameter]) {
         self.label = label
         self.parameters = parameters
+    }
+}
+
+/// One textual replacement produced by a rename or code action.
+public struct LSPTextEdit: Sendable, Equatable {
+    /// Resolved filesystem path of the file this edit belongs to.
+    public let path: String
+    public let range: LSPRange
+    public let newText: String
+
+    public init(path: String, range: LSPRange, newText: String) {
+        self.path = path
+        self.range = range
+        self.newText = newText
     }
 }

@@ -394,7 +394,7 @@ public final class AppState: ObservableObject {
     /// Latest clangd result per file, keyed by standardized URL.
     @Published private var diagnosticsByFile: [URL: [LSPDiagnostic]] = [:]
 
-    private var semanticProvider: SemanticCompletionProvider?
+    var semanticProvider: SemanticCompletionProvider?
     /// Workspace root clangd is bound to.
     private var semanticWorkspace: URL?
 
@@ -522,6 +522,9 @@ public final class AppState: ObservableObject {
             provider.syncDocument(text: document.text, fileURL: document.semanticURL)
             wireHoverAndNavigation(document, provider: provider)
             wireSignatureHint(document, provider: provider)
+            document.engine.textView.onRenameRequest = { [weak self] in
+                self?.renameSymbolAtCaret()
+            }
         }
         wireInlineSuggestion(document)
     }

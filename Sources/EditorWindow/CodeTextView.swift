@@ -506,6 +506,12 @@ public final class CodeTextView: NSTextView {
 
     public override func keyDown(with event: NSEvent) {
         if handleCompletionKey(event) { return }
+        // F2 renames the symbol at the caret. Handled here because SwiftUI's
+        // `keyboardShortcut` does not bind function keys reliably.
+        if event.keyCode == 120, onRenameRequest != nil {
+            onRenameRequest?()
+            return
+        }
         super.keyDown(with: event)
     }
 
@@ -896,6 +902,8 @@ public final class CodeTextView: NSTextView {
     public var onDocumentRevisionChanged: (() -> Void)?
     /// Called when the caret moves or text changes, to refresh the parameter hint.
     public var onSignatureQuery: (() -> Void)?
+    /// Called when the user presses F2 to rename the symbol under the caret.
+    public var onRenameRequest: (() -> Void)?
     /// Pending prediction request.
     var pendingSuggestionWork: DispatchWorkItem?
 

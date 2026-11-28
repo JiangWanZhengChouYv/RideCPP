@@ -144,4 +144,58 @@ public func showFind(replacing: Bool) {
     _ = document
     find.show(replacing: replacing)
 }
+
+    /// Renames the symbol under the caret across the document.
+    ///
+    /// The identifier is taken from the word around the caret, so the dialog opens
+    /// with the current name rather than an empty field.
+    public func renameSymbolAtCaret() {
+        guard let document = selectedDocument, let provider = semanticProvider else { return }
+        let textView = document.engine.textView
+        let ns = document.text as NSString
+        let caret = min(textView.selectedRange().location, ns.length)
+        guard let word = Self.identifier(around: caret, in: ns) else {
+            statusText = L10n.t("status.noSymbolHere")
+            return
+        }
+        let offset = word.location
+        textView.promptForRename(current: ns.substring(with: word),
+                                 texts: .init(title: L10n.t("rename.title"),
+                                              message: L10n.t("rename.message"),
+                                              placeholder: L10n.t("rename.placeholder"),
+                                              confirm: L10n.t("rename.ok"),
+                                              cancel: L10n.t("rename.cancel"))) { [weak self] newName in
+            guard let self else { return }
+            provider.rename(atOffset: offset, in: document.text, to: newName,
+                            fileURL: document.semanticURL) { result in
+                switch result {
+                case .success(let edits):
+                    let applied = textView.applyRenameEdits(edits)
+                    self.statusText = applied
+                        ? L10n.t("status.renamed", edits.count)
+                        : L10n.t("status.noSymbolHere")
+                case .failure(let error):
+                    self.statusText = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    /// The identifier characters around `offset`, including one the caret is just
+    /// after (which is where it sits after a double-click or ⌘D style selection).
+    static func identifier(around offset: Int, in text: NSString) -> NSRange? {
+        func isWord(_ index: Int) -> Bool {
+            guard index >= 0, index < text.length else { return false }
+            guard let scalar = UnicodeScalar(text.character(at: index)) else { return false }
+            return CharacterSet.alphanumerics.contains(scalar) || scalar == "_"
+        }
+        var start = offset
+        if !isWord(start), isWord(start - 1) { start -= 1 }
+        guard isWord(start) else { return nil }
+        var end = start
+        while isWord(end) { end += 1 }
+        var begin = start
+        while isWord(begin - 1) { begin -= 1 }
+        return NSRange(location: begin, length: end - begin)
+    }
 }

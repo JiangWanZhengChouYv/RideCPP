@@ -228,3 +228,13 @@
 "find.replaceAll" = "Replace All";
 "find.menu.find" = "Find…";
 "find.menu.replace" = "Find and Replace…";
+
+"rename.title" = "Rename Symbol";
+"rename.message" = "Every reference in this file will be renamed.";
+"rename.placeholder" = "New name";
+"rename.ok" = "Rename";
+"rename.cancel" = "Cancel";
+"status.noSymbolHere" = "Place the cursor on an identifier first";
+"status.renamed" = "Renamed %d references";
+
+"edit.rename" = "Rename Symbol";
