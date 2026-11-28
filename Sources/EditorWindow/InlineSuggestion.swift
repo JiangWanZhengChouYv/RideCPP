@@ -67,21 +67,18 @@ public func requestSuggestionNow() {
     // `lineRange` for a caret at the start of an empty last line covers that
     // empty line, so the text shown is "" even though the line above is full.
     // Look backwards to the first non-empty line instead of giving up.
-    var beforeCaret = ""
-    var probe = caret
-    while probe >= 0 {
-        let lineRange = ns.lineRange(for: NSRange(location: probe, length: 0))
-        let lineText = ns.substring(with: NSRange(location: lineRange.location,
-                                                 length: probe - lineRange.location))
-        if !lineText.trimmingCharacters(in: .whitespaces).isEmpty {
-            beforeCaret = lineText
-            break
-        }
-        if lineRange.location == 0 { break }
-        probe = lineRange.location - 1
-    }
+    // Only the line being typed is continued. Walking back to the previous
+    // non-empty line made a suggestion reappear after Enter, once the line was
+    // finished — a prediction for a line the user had already moved past.
+    let lineRange = ns.lineRange(for: NSRange(location: caret, length: 0))
+    let beforeCaret = ns.substring(with: NSRange(location: lineRange.location,
+                                                 length: caret - lineRange.location))
     let trimmed = beforeCaret.trimmingCharacters(in: .whitespaces)
     guard !trimmed.isEmpty, !trimmed.hasPrefix("//"), !trimmed.hasPrefix("#") else {
+        return dismissSuggestion()
+    }
+    // A line that already ends a statement is finished; nothing to continue.
+    if trimmed.hasSuffix(";") || trimmed.hasSuffix("}") || trimmed.hasSuffix("{") {
         return dismissSuggestion()
     }
     let suffix = ns.substring(from: caret)
@@ -113,13 +110,40 @@ public func dismissSuggestion() {
     }
 
     /// Rect the caret occupies, in this view's coordinates.
+    ///
+    /// Built from the line fragment and the glyph's own offset rather than from
+    /// `boundingRect(forGlyphRange:)`: a zero-length range has no reliable bounds,
+    /// and on a line with trailing spaces the text view reports the fragment's
+    /// own rect — which is why the ghost text drifted away from the caret.
     func caretRectInView() -> NSRect? {
-        guard let layoutManager, let container = textContainer else { return nil }
-        let location = min(selectedRange().location, (string as NSString).length)
-        let glyphIndex = layoutManager.glyphIndexForCharacter(at: location)
-        let rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyphIndex, length: 0),
-                                              in: container)
-        return rect.offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+        guard let layoutManager, let container = textContainer else {
+            return nil
+        }
+        let length = (string as NSString).length
+        let location = min(max(0, selectedRange().location), length)
+        // At the end of the document there is no glyph at `location`; anchor to
+        // the last one and advance past it.
+        let glyphIndex: Int
+        var advancePastGlyph = false
+        if location >= length, length > 0 {
+            glyphIndex = layoutManager.glyphIndexForCharacter(at: length - 1)
+            advancePastGlyph = true
+        } else {
+            glyphIndex = layoutManager.glyphIndexForCharacter(at: location)
+        }
+        let lineRect = layoutManager.lineFragmentUsedRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+        var x = lineRect.minX
+        if advancePastGlyph {
+            x = layoutManager.location(forGlyphAt: glyphIndex).x
+                + layoutManager.boundingRect(forGlyphRange: NSRange(location: glyphIndex, length: 1),
+                                             in: container).width
+        } else {
+            x = layoutManager.location(forGlyphAt: glyphIndex).x
+        }
+        return NSRect(x: x + textContainerOrigin.x,
+                      y: lineRect.minY + textContainerOrigin.y,
+                      width: 2,
+                      height: lineRect.height)
     }
 
 public func showSuggestion(_ text: String?) {

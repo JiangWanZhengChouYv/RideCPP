@@ -52,11 +52,16 @@ public final class OllamaClient {
         }
     }
 
-    /// Preference order. Smaller is always tried first.
+    /// Preference order, best quality first.
+    ///
+    /// The 1.5b is the default because the 0.5b adds commentary to its answers
+    /// (`amespace std;  // This line is necessary to use the std::cout object`),
+    /// which is unusable as inserted code. Measured warm on this machine, the
+    /// 1.5b answers in 0.02-0.16 s — no slower than the smaller model once
+    /// loaded — and completes `for` loops properly.
     public static let defaultModels = [
-        "qwen2.5-coder:0.5b",
         "qwen2.5-coder:1.5b",
-        "qwen2.5-coder:0.5b-instruct-q4_K_M"
+        "qwen2.5-coder:0.5b"
     ]
 
     public var config: Config

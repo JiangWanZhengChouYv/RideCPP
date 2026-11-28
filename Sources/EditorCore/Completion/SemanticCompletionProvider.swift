@@ -337,37 +337,43 @@ public final class SemanticCompletionProvider: CompletionProviding {
     /// Turns LSP snippet syntax into our `⟨placeholder⟩` marker.
     static func convertSnippet(_ text: String) -> String {
         guard text.contains("${") || text.contains("$0") else { return text }
+        // `$0` is the final cursor position and carries no text of its own.
+        // clangd uses it heavily — `using namespace $0;` is its whole suggestion
+        // for a using-directive — and leaving the marker in place produced the
+        // literal `using namespace $0;` in the list.
+        let withoutPosition = text.replacingOccurrences(of: "$0", with: "")
         var result = ""
-        var index = text.startIndex
-        while index < text.endIndex {
-            let character = text[index]
-            if character == "$", text.index(after: index) < text.endIndex,
-               text[text.index(after: index)] == "{" {
+        var index = withoutPosition.startIndex
+        while index < withoutPosition.endIndex {
+            let character = withoutPosition[index]
+            if character == "$", withoutPosition.index(after: index) < withoutPosition.endIndex,
+               withoutPosition[withoutPosition.index(after: index)] == "{" {
                 // ${1:name} or ${1|a,b|}
-                var cursor = text.index(index, offsetBy: 2)
+                var cursor = withoutPosition.index(index, offsetBy: 2)
                 var number = ""
-                while cursor < text.endIndex, text[cursor].isNumber {
-                    number.append(text[cursor])
-                    cursor = text.index(after: cursor)
+                while cursor < withoutPosition.endIndex, withoutPosition[cursor].isNumber {
+                    number.append(withoutPosition[cursor])
+                    cursor = withoutPosition.index(after: cursor)
                 }
-                if cursor < text.endIndex, text[cursor] == ":" {
-                    cursor = text.index(after: cursor)
+                if cursor < withoutPosition.endIndex, withoutPosition[cursor] == ":" {
+                    cursor = withoutPosition.index(after: cursor)
                     var placeholder = ""
                     var depth = 1
-                    while cursor < text.endIndex {
-                        let c = text[cursor]
+                    while cursor < withoutPosition.endIndex {
+                        let c = withoutPosition[cursor]
                         if c == "}" {
                             depth -= 1
                             if depth == 0 { break }
                         }
                         placeholder.append(c)
-                        cursor = text.index(after: cursor)
+                        cursor = withoutPosition.index(after: cursor)
                     }
                     if !placeholder.isEmpty { result += "⟨\(placeholder)⟩" }
-                    index = cursor < text.endIndex ? text.index(after: cursor) : text.endIndex
+                    index = cursor < withoutPosition.endIndex
+                        ? withoutPosition.index(after: cursor) : withoutPosition.endIndex
                     continue
                 }
-                index = text.index(index, offsetBy: 2)
+                index = withoutPosition.index(index, offsetBy: 2)
                 continue
             }
             result.append(character)
